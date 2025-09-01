@@ -1,0 +1,66 @@
+services:
+  ollama:
+    image: ollama/ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./ollama-data:/root/.ollama
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - OLLAMA_USE_GPU=true
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    ports:
+      - "3000:8080"
+    depends_on:
+      - langchain-api
+    environment:
+#      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_BASE_URL=http://langchain-api:8000
+      - WEBUI_AUTH=false
+    volumes:
+      - ./openwebui-data:/app/backend/data
+    restart: unless-stopped
+
+  langchain-api:
+    build:
+      context: ./langchain-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./langchain-api:/app
+    depends_on:
+      - ollama
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ragdb
+      POSTGRES_USER: raguser
+      POSTGRES_PASSWORD: ragpass
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  pgvector:
+    image: ankane/pgvector
+    build:
+      context: .
+      dockerfile: Dockerfile.pgvector
+    depends_on:
+      - postgres
