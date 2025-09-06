@@ -6,17 +6,17 @@ services:
     volumes:
       - ./ollama-data:/root/.ollama
     restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      - OLLAMA_USE_GPU=true
+#    deploy:
+#      resources:
+#        reservations:
+#          devices:
+#            - driver: nvidia
+#              count: all
+#              capabilities: [gpu]
+#    environment:
+#      - NVIDIA_VISIBLE_DEVICES=all
+#      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+#      - OLLAMA_USE_GPU=true
 
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
@@ -25,8 +25,11 @@ services:
     depends_on:
       - langchain-api
     environment:
+      - OPENAI_API_BASE_URL=http://langchain-api:8000/v1
+      - OPENAI_API_KEY=dummy
 #      - OLLAMA_BASE_URL=http://ollama:11434
       - OLLAMA_BASE_URL=http://langchain-api:8000
+#      - OLLAMA_BASE_URL=http://192.168.100.100:11434
       - WEBUI_AUTH=false
     volumes:
       - ./openwebui-data:/app/backend/data
@@ -43,6 +46,10 @@ services:
       - ollama
     environment:
       - OLLAMA_BASE_URL=http://ollama:11434
+      - DEFAULT_MODEL=llama3.1
+      - ALLOW_ORIGINS=*
+      # - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_BASE_URL=http://192.168.100.100:11434
     restart: unless-stopped
 
   postgres:

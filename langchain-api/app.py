@@ -1,94 +1,179 @@
+from __future__ import annotations
+
+import asyncio
+import json
 import os
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from typing import Any, Dict, List, Optional, Literal
+
 import httpx
-from dotenv import load_dotenv
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
 
-# .env ファイルから環境変数を読み込む（必要なら）
-load_dotenv()
+from langchain_ollama.chat_models import ChatOllama
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, BaseMessage
 
+# ====== Settings ======
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "llama3.1")
+ALLOW_ORIGINS = os.getenv("ALLOW_ORIGINS", "*")
 
-app = FastAPI()
+# LangChain LLM (単純な素通し。ここにRAGやツール呼び出しを差し込める)
+llm = ChatOllama(model=DEFAULT_MODEL, base_url=OLLAMA_BASE_URL)
 
-# リレーするOllama APIのエンドポイント一覧
-PROXY_ENDPOINTS = [
-    "/api/generate",
-    "/api/tags",
-    "/api/copy",
-    "/api/show",
-    "/api/push",
-    "/api/pull",
-    "/api/ps",
-    "/api/create",
-    "/api/delete",
-    "/api/embed",
-    "/api/embeddings",
-    "/api/version",
-]
+# ====== FastAPI ======
+app = FastAPI(title="OpenAI-compatible LangChain Gateway (to Ollama)")
 
-@app.api_route("/{full_path:path}", methods=["GET", "POST"])
-async def relay_request(request: Request, full_path: str):
-    path = "/" + full_path
-    if any(path.startswith(endpoint) for endpoint in PROXY_ENDPOINTS):
-        async with httpx.AsyncClient() as client:
-            url = f"{OLLAMA_BASE_URL}{path}"
-            try:
-                # JSONボディを取得（あれば）
-                body = await request.body()
-                headers = dict(request.headers)
-                method = request.method.lower()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[ALLOW_ORIGINS] if ALLOW_ORIGINS != "*" else ["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-                response = await client.request(
-                    method=method,
-                    url=url,
-                    content=body,
-                    headers=headers,
-                    timeout=60.0,
-                )
-                return JSONResponse(
-                    status_code=response.status_code,
-                    content=response.json()
-                )
-            except Exception as e:
-                return JSONResponse(status_code=500, content={"error": str(e)})
-    elif path.startswith("/api/chat"):
-        return await proxy_chat(request)
-    else:
-        return JSONResponse(status_code=404, content={"error": "Not proxied"})
+# ====== Schemas (OpenAI互換の最低限) ======
+Role = Literal["system", "user", "assistant", "tool", "function"]
 
+class ChatMessage(BaseModel):
+    role: Role
+    content: str
 
-async def proxy_chat(request: Request):
-    payload = await request.json()
-    stream = payload.get("stream", False)
+class ChatRequest(BaseModel):
+    model: Optional[str] = None
+    messages: List[ChatMessage]
+    temperature: Optional[float] = 0.7
+    top_p: Optional[float] = 1.0
+    max_tokens: Optional[int] = None
+    stream: Optional[bool] = True
+    # お好みで追加: tools, tool_choice, frequency_penalty, presence_penalty, stop など
 
-    if stream:
-        async def event_generator():
-            async with httpx.AsyncClient(timeout=None) as client:
-                async with client.stream(
-                    "POST", f"{OLLAMA_BASE_URL}/api/chat",
-                    json=payload,
-                    headers={"Content-Type": "application/json"}
-                ) as upstream:
-                    async for line in upstream.aiter_lines():
-                        if line.strip():
-                            yield f"data: {line}\n\n"
-                    yield "data: [DONE]\n\n"
+class ChatChoiceDelta(BaseModel):
+    role: Optional[str] = None
+    content: Optional[str] = None
 
-        return StreamingResponse(event_generator(), media_type="text/event-stream")
+class ChatChoiceMessage(BaseModel):
+    role: str
+    content: str
 
-    else:
-        async with httpx.AsyncClient(timeout=None) as client:
-            response = await client.post(
-                f"{OLLAMA_BASE_URL}/api/chat",
-                json=payload,
-                headers={"Content-Type": "application/json"}
-            )
-            return JSONResponse(status_code=response.status_code, content=response.json())
+# ====== Utilities ======
+def to_lc_messages(msgs: List[ChatMessage]) -> List[BaseMessage]:
+    out: List[BaseMessage] = []
+    for m in msgs:
+        if m.role == "system":
+            out.append(SystemMessage(content=m.content))
+        elif m.role == "user":
+            out.append(HumanMessage(content=m.content))
+        elif m.role == "assistant":
+            out.append(AIMessage(content=m.content))
+        else:
+            # tool/function は最小実装では未対応。必要ならここで扱う。
+            out.append(HumanMessage(content=m.content))
+    return out
 
+async def sse_chunk(payload: Dict[str, Any]) -> str:
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
-# LangChain独自のAPIエンドポイント（例）
-@app.get("/api/langchain/hello")
-def langchain_hello():
-    return {"message": "Hello from LangChain API"}
+def completion_obj(content: str) -> Dict[str, Any]:
+    # OpenAIの非ストリーム応答っぽく返す
+    return {
+        "id": "chatcmpl-" + os.urandom(8).hex(),
+        "object": "chat.completion",
+        "created": int(asyncio.get_event_loop().time()),
+        "model": DEFAULT_MODEL,
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": content},
+            "finish_reason": "stop",
+        }],
+    }
 
+# ====== Endpoints ======
+@app.get("/v1/models")
+async def list_models():
+    """
+    Open WebUIが参照することがあるので、Ollamaのタグ一覧をOpenAI風に返す。
+    """
+    try:
+        async with httpx.AsyncClient(base_url=OLLAMA_BASE_URL, timeout=10) as client:
+            r = await client.get("/api/tags")
+            r.raise_for_status()
+            data = r.json()
+        models = []
+        for item in data.get("models", []):
+            name = item.get("name", "")
+            if name:
+                models.append({
+                    "id": name,
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": "ollama",
+                })
+        if not models:
+            # 少なくともデフォルトを出しておく
+            models = [{
+                "id": DEFAULT_MODEL,
+                "object": "model",
+                "created": 0,
+                "owned_by": "ollama",
+            }]
+        return {"object": "list", "data": models}
+    except Exception as e:
+        # フォールバック
+        return {"object": "list", "data": [{
+            "id": DEFAULT_MODEL, "object": "model", "created": 0, "owned_by": "ollama"
+        }]}
+
+@app.get("/v1/health")
+async def health():
+    return {"status": "ok"}
+
+@app.post("/v1/chat/completions")
+async def chat_completions(req: ChatRequest, request: Request):
+    """
+    OpenAI互換: /v1/chat/completions
+    - stream=True のとき SSE ストリーミング
+    - stream=False のとき まとめて返す
+    """
+    # モデル指定が来たら差し替え（存在しなくてもOllama任せ）
+    model = req.model or DEFAULT_MODEL
+    local_llm = ChatOllama(model=model, base_url=OLLAMA_BASE_URL, temperature=req.temperature)
+
+    lc_msgs = to_lc_messages(req.messages)
+
+    if req.stream:
+        async def gen():
+            # ヘッダ: delta.role を先に送る（OpenAI形式に寄せる）
+            head = {"id": "chatcmpl-" + os.urandom(8).hex(), "object": "chat.completion.chunk",
+                    "created": int(asyncio.get_event_loop().time()), "model": model,
+                    "choices": [{"index": 0, "delta": {"role": "assistant"}}]}
+            yield await sse_chunk(head)
+
+            # LangChainのastreamで部分文字列を流す
+            async for chunk in local_llm.astream(lc_msgs):
+                # chunk は AIMessage(部分)のことが多い。contentが差分として入る。
+                delta_text = getattr(chunk, "content", None) or ""
+                if delta_text:
+                    payload = {
+                        "id": head["id"],
+                        "object": "chat.completion.chunk",
+                        "created": head["created"],
+                        "model": model,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {"content": delta_text},
+                            "finish_reason": None
+                        }]
+                    }
+                    yield await sse_chunk(payload)
+                await asyncio.sleep(0)
+
+            # フッタ: DONE
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
+    # 非ストリーム
+    out = await local_llm.ainvoke(lc_msgs)
+    return JSONResponse(completion_obj(out.content))
