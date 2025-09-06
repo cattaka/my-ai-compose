@@ -6,11 +6,12 @@ import os
 from typing import Any, Dict, List, Optional, Literal
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from langchain_community.llms import Ollama
 from langchain_ollama.chat_models import ChatOllama
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, BaseMessage
 
@@ -177,3 +178,57 @@ async def chat_completions(req: ChatRequest, request: Request):
     # 非ストリーム
     out = await local_llm.ainvoke(lc_msgs)
     return JSONResponse(completion_obj(out.content))
+
+@app.get("/api/tags")
+async def relay_tags():
+    async with httpx.AsyncClient(base_url=OLLAMA_BASE_URL) as client:
+        r = await client.get("/api/tags")
+        return Response(content=r.content, status_code=r.status_code, media_type=r.headers.get("content-type", "application/json"))
+
+@app.get("/api/version")
+async def relay_version():
+    async with httpx.AsyncClient(base_url=OLLAMA_BASE_URL) as client:
+        r = await client.get("/api/version")
+        return Response(content=r.content, status_code=r.status_code, media_type=r.headers.get("content-type", "application/json"))
+
+@app.get("/api/ps")
+async def relay_ps():
+    async with httpx.AsyncClient(base_url=OLLAMA_BASE_URL) as client:
+        r = await client.get("/api/ps")
+        return Response(content=r.content, status_code=r.status_code, media_type=r.headers.get("content-type", "application/json"))
+
+@app.post("/api/chat")
+async def relay(request: Request):
+    body = await request.body()
+    headers = {"Content-Type": "application/json"}
+
+    async def gen():
+        # ← コンテキストは generator の中で張る
+        async with httpx.AsyncClient(base_url=OLLAMA_BASE_URL, timeout=30) as client:
+            async with client.stream("POST", "/api/chat", content=body, headers=headers) as resp:
+                # 上流がSSEなら Content-Type が text/event-stream のはず
+                if resp.status_code != 200:
+                    # エラーボディを丸ごと回収してJSONにして返す（好みで透過でもOK）
+                    text = await resp.aread()
+                    yield f"data: {json.dumps({'error': text.decode('utf-8','ignore')})}\n\n"
+                    return
+
+                try:
+                    async for chunk in resp.aiter_bytes():
+                        # 透過転送（上流が data: 行を流してくるならそのままOK）
+                        yield chunk
+                        await asyncio.sleep(0)
+                except (httpx.ReadError, httpx.StreamClosed):
+                    # クライアント切断や上流切断時に静かに終了
+                    return
+
+    # SSEとして返す。必要ならヘッダーも追加
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # nginx 経由ならバッファ無効化
+        },
+    )
