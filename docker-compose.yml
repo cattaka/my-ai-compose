@@ -28,9 +28,12 @@ services:
       - OPENAI_API_BASE_URL=http://langchain-api:8000/v1
       - OPENAI_API_KEY=dummy
 #      - OLLAMA_BASE_URL=http://ollama:11434
-      - OLLAMA_BASE_URL=http://langchain-api:8000
+#      - OLLAMA_BASE_URL=http://langchain-api:8000
 #      - OLLAMA_BASE_URL=http://192.168.100.100:11434
+      - OLLAMA_BASE_URL=http://host.docker.internal:8000
       - WEBUI_AUTH=false
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./openwebui-data:/app/backend/data
     restart: unless-stopped

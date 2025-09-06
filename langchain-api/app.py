@@ -204,7 +204,7 @@ async def relay(request: Request):
 
     async def gen():
         # ← コンテキストは generator の中で張る
-        async with httpx.AsyncClient(base_url=OLLAMA_BASE_URL, timeout=30) as client:
+        async with httpx.AsyncClient(base_url=OLLAMA_BASE_URL, timeout=60) as client:
             async with client.stream("POST", "/api/chat", content=body, headers=headers) as resp:
                 # 上流がSSEなら Content-Type が text/event-stream のはず
                 if resp.status_code != 200:
