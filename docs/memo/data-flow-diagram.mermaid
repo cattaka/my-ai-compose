@@ -1,0 +1,89 @@
+%% Data / Control Flow Overview (High-Level)
+%% Legend:
+%% Solid arrows: primary request/response
+%% Dashed arrows: metadata / auxiliary / caching
+%% Dotted arrows: optional or conditional paths
+
+flowchart LR
+
+%% ========== USER & UI ==========
+U[User Browser] --> WUI[Open WebUI]
+subgraph OpenWebUI
+  WUI -->|User prompt and model selection| Gateway
+  Gateway -->|SSE / streamed lines| WUI
+end
+
+%% ========== GATEWAY / LANGCHAIN API ==========
+subgraph LangChainAPI[LangChain API Layer]
+  Gateway --> Mode["Mode decision<br/>(chat vs generate)"]
+  Mode -->|messages flatten| PromptFuse
+  Mode -->|direct prompt| PromptFuse
+  PromptFuse -->|simple path| LLMEntry
+  PromptFuse -->|agent path| Orchestrator
+end
+
+%% ========== ORCHESTRATOR / AGENT ==========
+subgraph Orchestrator[Agent Orchestrator]
+  Orchestrator --> Intent[Intent / Category]
+  Orchestrator --> Planner["LLM Planner (JSON plan)"]
+  Intent --> Router{Routing}
+  Planner --> Router
+  Router --> RetrieverSel[Select retriever]
+  Router --> ToolSel[Select tool]
+  RetrieverSel --> RetrievalFlow
+  ToolSel --> ToolExec
+  RetrievalFlow --> CtxBuild[Context Builder]
+  ToolExec --> CtxBuild
+  CtxBuild --> FinalPrompt[Final Prompt Composer]
+  FinalPrompt --> LLMEntry
+end
+
+%% ========== RETRIEVAL SUBSYSTEM ==========
+subgraph Retrieval[Retrieval Flow]
+  RetrievalFlow --> QGen[Query & Embeddings]
+  QGen --> ES[Elasticsearch]
+  QGen --> Vec[Vector Store]
+  QGen --> PGDocs[Postgres Docs]
+  ES --> Merge[Merge / Dedup / Compress]
+  Vec --> Merge
+  PGDocs --> Merge
+  Merge --> RetrievalFlow
+end
+
+%% ========== STORAGE ==========
+subgraph Storage[Persistent Storage]
+  PGDocs --- PGMeta[Versions / Lineage / Tags]
+end
+
+%% ========== TOOLS ==========
+subgraph Tools[Tool Execution]
+  ToolExec --> ToolCalls{Tool Calls}
+  ToolCalls --> WebSearch[Web Search]
+  ToolCalls --> Math[Math Eval]
+  ToolCalls --> Classify[Classifier / Tagger]
+  ToolCalls --> DBWrite[DB Write Ops]
+  DBWrite --> PGDocs
+  Classify --> PGMeta
+end
+
+%% ========== LLM BACKENDS ==========
+subgraph LLMBackends[LLM Backends]
+  LLMEntry --> Backend{Backend Select}
+  Backend --> Ollama[Ollama]
+  Backend --> Remote[OpenAI / Other]
+  Ollama --> Stream
+  Remote --> Stream
+end
+Stream --> Gateway
+
+%% ========== PERFORMANCE / CONTEXT ==========
+subgraph Perf[Context & Caching]
+  Stream --> CtxExtract[Extract context tokens]
+  CtxExtract -.-> CtxCache[Context Cache]
+  CtxCache -.-> PromptFuse
+  CtxBuild -.-> ES
+  CtxBuild -.-> Vec
+end
+
+%% ========== FEEDBACK LOOP ==========
+WUI -->|Follow-up| WUI
