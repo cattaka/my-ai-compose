@@ -55,7 +55,7 @@ services:
       # - OLLAMA_BASE_URL=http://ollama:11434
       - OLLAMA_BASE_URL=http://192.168.100.100:11434
       # Postgres connection (added)
-      - DATABASE_URL=postgresql://raguser:ragpass@postgres:5432/ragdb
+      - DATABASE_URL=postgresql+psycopg://raguser:ragpass@postgres:5432/ragdb
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_NAME=ragdb

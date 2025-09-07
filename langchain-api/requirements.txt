@@ -6,3 +6,6 @@ aiohttp
 fastapi
 uvicorn
 httpx
+SQLAlchemy
+alembic
+psycopg
