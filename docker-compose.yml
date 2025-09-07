@@ -47,12 +47,20 @@ services:
       - ./langchain-api:/app
     depends_on:
       - ollama
+      - postgres            # added so API waits for postgres
     environment:
       - OLLAMA_BASE_URL=http://ollama:11434
       - DEFAULT_MODEL=llama3.1
       - ALLOW_ORIGINS=*
       # - OLLAMA_BASE_URL=http://ollama:11434
       - OLLAMA_BASE_URL=http://192.168.100.100:11434
+      # Postgres connection (added)
+      - DATABASE_URL=postgresql://raguser:ragpass@postgres:5432/ragdb
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=ragdb
+      - DB_USER=raguser
+      - DB_PASSWORD=ragpass
     restart: unless-stopped
 
   postgres:
