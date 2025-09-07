@@ -1,0 +1,47 @@
+%% self-maintenance-memories (outputs inserted between processing nodes)
+
+flowchart TD
+
+%% STATE OVERVIEW (logical grouping only)
+STATE[[State Vars]]
+STATE --- S1
+STATE --- S2
+S1 -->|"user_input memory_simplicity known_words unknown_words"| STATE
+S2 -->|"requested_memories require_more_memory new_terms new_knowledge answer"| STATE
+
+%% PROCESS NODES
+INIT([initial_node])
+UNK([checking_unknown_words_node])
+NEED([checking_need_more_memory_node])
+BR{require_more_memory && memory_simplicity < 1000?}
+ESC([escalate_memory_node +500])
+UPD([update_memories_node])
+ANS([answer_node])
+END((END))
+
+%% OUTPUT (DATA) NODES BETWEEN STEPS
+OUT_INIT[[known_words unknown_words]]
+OUT_UNK[[unknown_words]]
+OUT_NEED[[requested_memories require_more_memory]]
+OUT_ESC[[memory_simplicity known_words]]
+OUT_UPD[[new_terms new_knowledge]]
+OUT_ANS[[answer]]
+
+%% FLOWS WITH EXPLICIT OUTPUTS
+INIT --> OUT_INIT --> UNK
+UNK  --> OUT_UNK  --> NEED
+NEED --> OUT_NEED --> BR
+
+BR -->|Yes| ESC
+ESC --> OUT_ESC --> NEED
+
+%% loop after escalating simplicity (re-check with new level)
+
+BR -->|No| UPD
+UPD --> OUT_UPD --> ANS
+ANS --> OUT_ANS --> END
+
+%% STYLES
+class INIT,UNK,NEED,ESC,UPD,ANS proc
+class BR branch
+class OUT_INIT,OUT_UNK,OUT_NEED,OUT_ESC,OUT_UPD,OUT_ANS data

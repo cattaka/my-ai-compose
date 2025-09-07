@@ -28,15 +28,15 @@
 - initial_node: 初期値
   - state
     - $memory_simplicity = 0
-    - $known_words
-      - SELECT title FROM memories WHERE memory_simplicity <= $memory_simplicity
+    - $wellknown_words
+      - SELECT title FROM memories WHERE memory_simplicity <= 0
     - $unknown_words = []
   - 次のノード
     - checking_unknown_words_node
 - checking_unknown_words_node: 意味が必要な単語の確認
   - input
     - ユーザの入力したテキスト
-    - $known_words
+    - $wellknown_words
   - output
     - $unknown_words: 意味の要求が必要な単語のリスト
   - 次のノード
@@ -47,7 +47,7 @@
       - SELECT title, content FROM memories WHERE memory_simplicity <= $memory_simplicity
   - input
     - ユーザの入力したテキスト
-    - $known_words
+    - $wellknown_words
     - $requested_memories
   - output
     - $unknown_words: 意味の要求が必要な単語のリスト
@@ -61,7 +61,7 @@
 - update_memories
   - input
     - ユーザの入力したテキスト
-    - $known_words
+    - $wellknown_words
     - $requested_memories
   - output
     - 追加や更新が必要な単語のリスト
@@ -73,7 +73,7 @@
 - answer_node: 回答の生成
   - input
     - ユーザの入力したテキスト
-    - $known_words
+    - $wellknown_words
     - $requested_memories
   - output
     - LLMが生成する
