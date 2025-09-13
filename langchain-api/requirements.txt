@@ -9,3 +9,4 @@ httpx
 SQLAlchemy
 alembic
 psycopg
+psycopg2
