@@ -56,32 +56,39 @@ async def sse_chunk(payload: Dict[str, Any]) -> str:
 @router.post("/completions")
 async def chat_completions(req: ChatRequest, request: Request):
     model = req.model or settings.DEFAULT_MODEL
+
+    # 非ストリーミング: 常に LangGraph 経由
+    if not req.stream:
+        from app.graph.chat_graph import run_simple_chat
+        raw_messages = [m.model_dump() for m in req.messages]
+        answer = run_simple_chat(model=model, messages=raw_messages)
+        return JSONResponse(completion_obj(answer, model))
+
+    # ストリーミング: 既存ダイレクト LLM
     llm = get_llm(model=model, temperature=req.temperature)
     lc_msgs = to_lc_messages(req.messages)
 
-    if req.stream:
-        async def gen():
-            head = {"id": "chatcmpl-" + os.urandom(8).hex(), "object": "chat.completion.chunk",
-                    "created": int(asyncio.get_event_loop().time()), "model": model,
-                    "choices": [{"index": 0, "delta": {"role": "assistant"}}]}
-            yield await sse_chunk(head)
-            async for chunk in llm.astream(lc_msgs):
-                delta_text = getattr(chunk, "content", "") or ""
-                if delta_text:
-                    payload = {
-                        "id": head["id"],
-                        "object": "chat.completion.chunk",
-                        "created": head["created"],
-                        "model": model,
-                        "choices": [{
-                            "index": 0,
-                            "delta": {"content": delta_text},
-                            "finish_reason": None
-                        }]
-                    }
-                    yield await sse_chunk(payload)
-                await asyncio.sleep(0)
-            yield "data: [DONE]\n\n"
-        return StreamingResponse(gen(), media_type="text/event-stream")
-    out = await llm.ainvoke(lc_msgs)
-    return JSONResponse(completion_obj(out.content, model))
+    async def gen():
+        head = {"id": "chatcmpl-" + os.urandom(8).hex(), "object": "chat.completion.chunk",
+                "created": int(asyncio.get_event_loop().time()), "model": model,
+                "choices": [{"index": 0, "delta": {"role": "assistant"}}]}
+        yield await sse_chunk(head)
+        async for chunk in llm.astream(lc_msgs):
+            delta_text = getattr(chunk, "content", "") or ""
+            if delta_text:
+                payload = {
+                    "id": head["id"],
+                    "object": "chat.completion.chunk",
+                    "created": head["created"],
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"content": delta_text},
+                        "finish_reason": None
+                    }]
+                }
+                yield await sse_chunk(payload)
+            await asyncio.sleep(0)
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
