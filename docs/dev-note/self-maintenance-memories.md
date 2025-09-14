@@ -25,56 +25,62 @@
 
 ## LangGraph
 
-- initial_node: 初期値
+- fetch_wellknown_words_node: 初期値
   - state
     - $memory_simplicity = 0
     - $wellknown_words
       - SELECT title FROM memories WHERE memory_simplicity <= 0
-    - $unknown_words = []
+    - $word_meanings = []
   - 次のノード
-    - checking_unknown_words_node
-- checking_unknown_words_node: 意味が必要な単語の確認
+    - ask_word_meanings_node
+- ask_word_meanings_node: 意味が必要な単語の確認
   - input
     - ユーザの入力したテキスト
     - $wellknown_words
   - output
-    - $unknown_words: 意味の要求が必要な単語のリスト
+    - $requested_words: 意味の要求が必要な単語のリスト
   - 次のノード
-    checking_need_more_memory_node
-- checking_need_more_memory_node: 単語の意味を付加した状態での入力
-  - 前処理
-    - $requested_memories
-      - SELECT title, content FROM memories WHERE memory_simplicity <= $memory_simplicity
+    ask_more_word_meanings_node
+- fetch_word_meanings_node
+  - 処理
+    - $word_meanings
+      - SELECT title, content FROM memories WHERE title IN ($requested_words) AND memory_simplicity <= $memory_simplicity
+  - 次のノード
+    ask_more_word_meanings_node
+- ask_more_word_meanings_node: 単語の意味を付加した状態での入力
   - input
     - ユーザの入力したテキスト
     - $wellknown_words
-    - $requested_memories
+    - $word_meanings
   - output
-    - $unknown_words: 意味の要求が必要な単語のリスト
+    - $answer: 回答
+    - $requested_words: 意味の要求が必要な単語のリスト
     - require_more_memory: 回答を生成するのに十分な情報があるか？
   - 次のノード
     - if need_more_memory_node == true || $memory_simplicity >= 1000
       - $memory_simplicity += 500
-      - checking_need_more_memory_node に改めて遷移する
+      - ask_more_word_meanings_node に改めて遷移する
     - else
-      - answer_node に遷移する
-- update_memories
+      - ask_updated_memories_node に遷移する
+- ask_updated_memories_node
   - input
     - ユーザの入力したテキスト
     - $wellknown_words
-    - $requested_memories
+    - $word_meanings
   - output
-    - 追加や更新が必要な単語のリスト
+    - $updated_words: 追加や更新が必要な単語のリスト
       - list of (title, content)
-    - 追加や更新が必要な理解した知識のリスト
+    - $updated_memories: 追加や更新が必要な理解した知識のリスト
       - list of (title, content, list of 親となるmemories)
   - 次のノード
-    - answer_node
-- answer_node: 回答の生成
-  - input
-    - ユーザの入力したテキスト
-    - $wellknown_words
-    - $requested_memories
+    - save_updated_memories_node
+- save_updated_memories_node
+  - 処理
+    - $updated_words: memoriesテーブルに反映する
+    - $updated_memories: memoriesテーブルに反映する
+  - 次のノード
+    - finalize_node
+- finalize_node: 回答の生成
   - output
-    - LLMが生成する
+    - $answer
     - 意味の解釈に疑念が残る単語や理解した知識

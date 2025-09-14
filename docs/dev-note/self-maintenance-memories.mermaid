@@ -10,9 +10,9 @@ S1 -->|"user_input memory_simplicity known_words unknown_words"| STATE
 S2 -->|"requested_memories require_more_memory new_terms new_knowledge answer"| STATE
 
 %% PROCESS NODES
-INIT([initial_node])
-UNK([checking_unknown_words_node])
-NEED([checking_need_more_memory_node])
+INIT([fetch_wellknown_words_node])
+UNK([ask_word_meanings_node])
+NEED([ask_more_word_meanings_node])
 BR{require_more_memory && memory_simplicity < 1000?}
 ESC([escalate_memory_node +500])
 UPD([update_memories_node])
