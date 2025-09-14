@@ -1,12 +1,37 @@
 import os
-from typing import TypedDict, List, Any
+from typing import TypedDict, List, Dict, Any, Literal
 from langgraph.graph import StateGraph
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
-from app.services.llm import get_llm
-from app.graph.provider_chat_graph import build_provider_subgraph
 from typing import AsyncGenerator
 from app.graph.type import ChatState
-from app.graph.provider_chat_graph import prepare_node
+from app.graph.provider_chat_graph import call_llm_node
+from app.services.providers import (
+    resolve_provider,
+)
+
+def _to_lc_messages(raw: List[Dict[str, str]]) -> List[BaseMessage]:
+    out: List[BaseMessage] = []
+    for m in raw:
+        r = m.get("role")
+        c = m.get("content", "")
+        if r == "system":
+            out.append(SystemMessage(content=c))
+        elif r == "user":
+            out.append(HumanMessage(content=c))
+        elif r == "assistant":
+            out.append(AIMessage(content=c))
+        else:
+            out.append(HumanMessage(content=c))
+    return out
+
+def prepare_node(state: ChatState) -> ChatState:
+    provider, pure = resolve_provider(state.get("model"), state.get("provider"))
+    state["provider"] = provider
+    state["model"] = pure
+    state.setdefault("partial_answer", "")
+    if provider == "ollama":
+        state["lc_messages"] = _to_lc_messages(state["raw_messages"])
+    return state
 
 # ---- 親グラフ ----
 _graph = None
@@ -16,27 +41,13 @@ def get_chat_graph():
         return _graph
     g = StateGraph(ChatState)
     g.add_node("prepare_node", prepare_node)
-
-    # サブグラフを 2 種類（call / stream）として親に登録
-    g.add_node("provider_exec_call", build_provider_subgraph(stream=False))
-    g.add_node("provider_exec_stream", build_provider_subgraph(stream=True))
+    g.add_node("call_llm_node", call_llm_node)
     g.add_node("finalize_node", finalize_node)
 
     g.set_entry_point("prepare_node")
 
-    def route_stream(state: ChatState):
-        return "provider_exec_stream" if state.get("stream") else "provider_exec_call"
-
-    g.add_conditional_edges(
-        "prepare_node",
-        route_stream,
-        {
-            "provider_exec_call": "provider_exec_call",
-            "provider_exec_stream": "provider_exec_stream",
-        },
-    )
-    g.add_edge("provider_exec_call", "finalize_node")
-    g.add_edge("provider_exec_stream", "finalize_node")
+    g.add_edge("prepare_node", "call_llm_node")
+    g.add_edge("call_llm_node", "finalize_node")
     g.add_edge("finalize_node", "__end__")
     _graph = g.compile()
     return _graph

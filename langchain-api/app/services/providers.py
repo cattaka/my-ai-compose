@@ -1,9 +1,10 @@
 from __future__ import annotations
-import os, asyncio, json
+import json
 import httpx
-from typing import Iterable, AsyncGenerator, List, Dict, Any
+from typing import AsyncGenerator, List, Dict, Any
+
+from langchain_ollama import ChatOllama
 from app.core.config import settings
-from app.services.llm import get_llm  # Ollama(LangChain) 既存
 
 # 判定ユーティリティ
 def resolve_provider(model: str | None, explicit: str | None) -> tuple[str, str]:
@@ -79,3 +80,10 @@ async def ollama_stream(model: str, messages_lc, temperature: float | None):
     llm = get_llm(model=model, temperature=temperature)
     async for chunk in llm.astream(messages_lc):
         yield chunk
+
+def get_llm(model: str | None = None, **overrides):
+    return ChatOllama(
+        model=model or settings.DEFAULT_MODEL,
+        base_url=settings.OLLAMA_BASE_URL,
+        **overrides
+    )
