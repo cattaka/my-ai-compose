@@ -77,7 +77,7 @@ async def relay_chat(request: Request):
             "stream": True,
         }
         full = ""
-        async for mode, data in graph.astream(init_state, stream_mode=["custom", "values"]):
+        async for namespace, mode, data in graph.astream(init_state, stream_mode=["custom", "values"], subgraphs=True):
             if mode == "custom":
                 if data.get("event_name") != "token":
                     continue

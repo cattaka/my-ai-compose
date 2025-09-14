@@ -56,6 +56,93 @@ def route_provider(state: ChatState) -> Literal[
         return "openai_stream_node" if state["provider"] == "openai" else "ollama_stream_node"
     return "openai_call_node" if state["provider"] == "openai" else "ollama_call_node"
 
+# ---- サブグラフ構築ヘルパ ----
+from langgraph.graph import StateGraph as _StateGraph
+
+def build_provider_subgraph(stream: bool):
+    """
+    stream=True なら *stream_node を、False なら *call_node を内部に持つサブグラフを返す。
+    親グラフに add_node すると 1 ノードとして扱える。
+    """
+    sg = _StateGraph(ChatState)
+
+    # 内部ノード定義を再利用 (既存関数 openai_call_node 等をそのまま使う)
+    if stream:
+        sg.add_node("openai_stream_node", openai_stream_node)
+        sg.add_node("ollama_stream_node", ollama_stream_node)
+    else:
+        sg.add_node("openai_call_node", openai_call_node)
+        sg.add_node("ollama_call_node", ollama_call_node)
+
+    def _route(state: ChatState):
+        if state["provider"] == "openai":
+            return "openai_stream_node" if stream else "openai_call_node"
+        return "ollama_stream_node" if stream else "ollama_call_node"
+
+    sg.set_entry_point("router_entry")
+    # ルータ用ダミーノード
+    def router_entry(state: ChatState) -> ChatState:
+        return state
+    sg.add_node("router_entry", router_entry)
+
+    if stream:
+        sg.add_conditional_edges(
+            "router_entry",
+            _route,
+            {
+                "openai_stream_node": "openai_stream_node",
+                "ollama_stream_node": "ollama_stream_node",
+            },
+        )
+        sg.add_edge("openai_stream_node", "__end__")
+        sg.add_edge("ollama_stream_node", "__end__")
+    else:
+        sg.add_conditional_edges(
+            "router_entry",
+            _route,
+            {
+                "openai_call_node": "openai_call_node",
+                "ollama_call_node": "ollama_call_node",
+            },
+        )
+        sg.add_edge("openai_call_node", "__end__")
+        sg.add_edge("ollama_call_node", "__end__")
+
+    return sg.compile()
+
+# ---- 親グラフ ----
+_graph = None
+def get_chat_graph():
+    global _graph
+    if _graph:
+        return _graph
+    g = StateGraph(ChatState)
+    g.add_node("prepare_node", prepare_node)
+
+    # サブグラフを 2 種類（call / stream）として親に登録
+    g.add_node("provider_exec_call", build_provider_subgraph(stream=False))
+    g.add_node("provider_exec_stream", build_provider_subgraph(stream=True))
+    g.add_node("finalize_node", finalize_node)
+
+    g.set_entry_point("prepare_node")
+
+    def route_stream(state: ChatState):
+        return "provider_exec_stream" if state.get("stream") else "provider_exec_call"
+
+    g.add_conditional_edges(
+        "prepare_node",
+        route_stream,
+        {
+            "provider_exec_call": "provider_exec_call",
+            "provider_exec_stream": "provider_exec_stream",
+        },
+    )
+    g.add_edge("provider_exec_call", "finalize_node")
+    g.add_edge("provider_exec_stream", "finalize_node")
+    g.add_edge("finalize_node", "__end__")
+    _graph = g.compile()
+    return _graph
+
 # ---- 非ストリーミング ----
 async def openai_call_node(state: ChatState) -> ChatState:
     data = await openai_complete(
@@ -133,36 +220,6 @@ async def ollama_stream_node(state: ChatState) -> ChatState:
 
 def finalize_node(state: ChatState) -> ChatState:
     return state
-
-_graph = None
-def get_chat_graph():
-    global _graph
-    if _graph:
-        return _graph
-    g = StateGraph(ChatState)
-    g.add_node("prepare_node", prepare_node)
-    g.add_node("openai_call_node", openai_call_node)
-    g.add_node("ollama_call_node", ollama_call_node)
-    g.add_node("openai_stream_node", openai_stream_node)
-    g.add_node("ollama_stream_node", ollama_stream_node)
-    g.add_node("finalize_node", finalize_node)
-
-    g.set_entry_point("prepare_node")
-    g.add_conditional_edges(
-        "prepare_node",
-        route_provider,
-        {
-            "openai_call_node": "openai_call_node",
-            "ollama_call_node": "ollama_call_node",
-            "openai_stream_node": "openai_stream_node",
-            "ollama_stream_node": "ollama_stream_node",
-        },
-    )
-    for n in ("openai_call_node", "ollama_call_node", "openai_stream_node", "ollama_stream_node"):
-        g.add_edge(n, "finalize_node")
-    g.add_edge("finalize_node", "__end__")
-    _graph = g.compile()
-    return _graph
 
 # ---- Backward compatible wrapper functions (add) ----
 import os, asyncio, time
