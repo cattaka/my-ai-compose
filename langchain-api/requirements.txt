@@ -8,6 +8,5 @@ uvicorn
 httpx
 SQLAlchemy
 alembic
-psycopg
-psycopg2
+asyncpg
 langgraph

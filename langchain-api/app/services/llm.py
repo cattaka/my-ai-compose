@@ -11,23 +11,36 @@ from app.services.providers import (
     ollama_stream,
 )
 
-async def call_llm(provider: str, model: str, messages_lc: List[BaseMessage], temperature: float | None, stream: bool):
+async def call_llm(provider: str, model: str, messages_lc: List[BaseMessage], temperature: float | None, stream: bool) -> str:
+    answer = ""
     if provider == "openai":
-        return await _call_openai(model=model, messages_lc=messages_lc, temperature=temperature, stream=stream)
+        if stream:
+            answer = await _call_openai_async(model=model, messages_lc=messages_lc, output_structure=None, temperature=temperature)
+        else:
+            out = await _call_openai_sync(model=model, messages_lc=messages_lc, output_structure=None, temperature=temperature)
+            answer = getattr(out, "content", "")
     elif provider == "ollama":
-        return await _call_ollama(model=model, messages_lc=messages_lc, temperature=temperature, stream=stream)
+        if stream:
+            answer = await _call_ollama_async(model=model, messages_lc=messages_lc, output_structure=None, temperature=temperature)
+        else:
+            out = await _call_ollama_sync(model=model, messages_lc=messages_lc, output_structure=None, temperature=temperature)
+            answer = getattr(out, "content", "")
     else:
         raise ValueError(f"Unsupported provider: {provider}")
-
-async def _call_openai(model: str, messages_lc: List[BaseMessage], temperature: float | None, stream: bool):
-    answer = ""
-    if stream:
-        answer = await _call_openai_async(model=model, messages_lc=messages_lc, temperature=temperature)
-    else:
-        answer = await _call_openai_sync(model=model, messages_lc=messages_lc, temperature=temperature)
     return answer
 
-async def _call_openai_sync(model: str, messages_lc: List[BaseMessage], temperature: float | None) -> str:
+# output_type を指定した場合はstreamはFalse固定
+async def call_llm_with_output_type(provider: str, model: str, messages_lc: List[BaseMessage], output_structure: type, temperature: float | None):
+    if provider == "openai":
+        answer = await _call_openai_sync(model=model, messages_lc=messages_lc, output_structure=output_structure, temperature=temperature)
+    elif provider == "ollama":
+        answer = await _call_ollama_sync(model=model, messages_lc=messages_lc, output_structure=output_structure, temperature=temperature)
+    else:
+        raise ValueError(f"Unsupported provider: {provider}")
+    return answer
+
+async def _call_openai_sync(model: str, messages_lc: List[BaseMessage], output_structure: type = None, temperature: float | None = None) -> str:
+    # TODO: output_structure 未対応
     data = await openai_complete(
         model=model,
         messages=messages_lc,
@@ -40,9 +53,10 @@ async def _call_openai_sync(model: str, messages_lc: List[BaseMessage], temperat
             answer = ch[0]["message"]["content"]
     except Exception:
         answer = ""
-    return answer
+    return {"content": answer}
 
-async def _call_openai_async(model: str, messages_lc: List[BaseMessage], temperature: float | None) -> str:
+async def _call_openai_async(model: str, messages_lc: List[BaseMessage], output_structure: type = None, temperature: float | None = None) -> str:
+    # TODO: output_structure 未対応
     writer = get_stream_writer()
     partial = ""
     async for ev in openai_stream(
@@ -67,28 +81,22 @@ async def _call_openai_async(model: str, messages_lc: List[BaseMessage], tempera
         })
     return partial
 
-async def _call_ollama(model: str, messages_lc: List[BaseMessage], temperature: float | None, stream: bool) -> str:
-    answer = ""
-    if stream:
-        answer = await _call_ollama_async(model=model, messages_lc=messages_lc, temperature=temperature)
-    else:
-        answer = await _call_ollama_sync(model=model, messages_lc=messages_lc, temperature=temperature)
-    return answer
-
-async def _call_ollama_sync(model: str, messages_lc: List[BaseMessage], temperature: float | None) -> str:
+async def _call_ollama_sync(model: str, messages_lc: List[BaseMessage], output_structure: type = None, temperature: float | None = None) -> str:
     out = await ollama_complete(
         model=model,
         messages_lc=messages_lc,
+        output_structure=output_structure,
         temperature=temperature,
     )
-    return getattr(out, "content", "")
+    return out
 
-async def _call_ollama_async(model: str, messages_lc: List[BaseMessage], temperature: float | None) -> str:
+async def _call_ollama_async(model: str, messages_lc: List[BaseMessage], output_structure: type = None, temperature: float | None = None) -> str:
     writer = get_stream_writer()
     partial = ""
     async for chunk in ollama_stream(
         model=model,
         messages_lc=messages_lc,
+        output_structure=output_structure,
         temperature=temperature,
     ):
         delta = getattr(chunk, "content", "")

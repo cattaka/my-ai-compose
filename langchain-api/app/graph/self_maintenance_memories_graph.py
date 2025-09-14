@@ -6,6 +6,8 @@ from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.graph.type import ChatState
+from app.services.llm import call_llm_with_output_type
+from langchain_core.runnables.config import RunnableConfig
 
 # --- DB Models ---
 from app.db.models.memory import Memory  # id, title, content, memory_simplicity,...
@@ -20,70 +22,74 @@ async def llm_call(prompt: str) -> str:
 
 # ============= ノード実装 =============
 
-async def fetch_wellknown_words_node(state: ChatState, session: AsyncSession) -> ChatState:
+async def fetch_wellknown_words_node(state: ChatState, config: RunnableConfig) -> ChatState:
     """
     memory_simplicity <= 0 の語彙を title リストで取得して state["wellknown_words"] に格納
     オプション: state に limit / offset / distinct フラグがあれば反映
     """
-    limit: int | None = state.get("wellknown_limit")          # 例: 上限件数
-    offset: int = state.get("wellknown_offset", 0)
-    use_distinct: bool = state.get("wellknown_distinct", False)
+    session: AsyncSession = config["configurable"]["session"]
+    state.setdefault("wellknown_words", [])
+    state.setdefault("word_meanings", [])
+    state.setdefault("requested_words", [])
+    state.setdefault("memory_simplicity", state.get("memory_simplicity", 0))
 
-    stmt = select(Memory.title).where(Memory.memory_simplicity <= 0)
+    memory_simplicity = state.get("memory_simplicity", 0)
 
-    if use_distinct:
-        # 重複を避けたい場合
-        stmt = stmt.distinct().order_by(Memory.title)
-    else:
-        # 安定順序 (ID 昇順)
-        stmt = stmt.order_by(Memory.id)
-
-    if offset:
-        stmt = stmt.offset(offset)
-    if limit:
-        stmt = stmt.limit(limit)
+    stmt = select(Memory.title).where(Memory.memory_simplicity <= memory_simplicity)
+    stmt = stmt.distinct().order_by(Memory.title)
 
     result = await session.execute(stmt)
     titles = result.scalars().all()
 
     state["wellknown_words"] = titles
-    state.setdefault("word_meanings", [])
-    state.setdefault("requested_words", [])
-    state.setdefault("notes", [])
-    state.setdefault("memory_simplicity", state.get("memory_simplicity", 0))
-    state.setdefault("max_memory_simplicity", 1000)
     return state
 
+class AskWordMeaningsAnswer(BaseMessage):
+    requested_words: List[str]
 
 async def ask_word_meanings_node(state: ChatState) -> ChatState:
     """
     ユーザ入力中の未知語抽出。今は簡易実装:
     wellknown_words に含まれない単語を requested_words にする。
     """
-    text = state.get("lc_messages", "")
-    tokens = list({t for t in text.replace("\n", " ").split(" ") if t})
-    known = set(state.get("wellknown_words", []))
-    # 既に意味取得済みは除外
-    already = {w["title"] for w in state.get("word_meanings", [])}
-    req = [t for t in tokens if t not in known and t not in already]
-    state["requested_words"] = req[:32]  # 過剰防止 (任意)
+    wellknown_words = state.get("wellknown_words", [])
+    if wellknown_words is None:
+        wellknown_words = []
+        state["requested_words"] = []
+        return state
+    lc_messages = state.get("lc_messages", [])
+    lc_messages = lc_messages + [
+    SystemMessage(content=(
+        "次の単語は既知である。この会話において意味の取得が必要なものを列挙せよ。\n"
+        + "\n".join(f"- {w}" for w in wellknown_words)
+    ))]
+
+    out = await call_llm_with_output_type(
+        provider=state["provider"],
+        model=state["model"],
+        messages_lc=lc_messages,
+        output_structure=AskWordMeaningsAnswer,
+        temperature=state.get("temperature"),
+    )
+
+    state["requested_words"] = out.requested_words
     return state
 
-
-async def fetch_word_meanings_node(state: ChatState, session: AsyncSession) -> ChatState:
+async def fetch_word_meanings_node(state: ChatState, config: RunnableConfig) -> ChatState:
     """
     requested_words の中で DB にある単語の意味を取得 (current memory_simplicity の閾値まで)
     """
+    session: AsyncSession = config["configurable"]["session"]
     if not state.get("requested_words"):
         return state
-    threshold = state.get("memory_simplicity", 0)
+    memory_simplicity = state.get("memory_simplicity", 0)
     req = state["requested_words"]
     if not req:
         return state
     stmt = (
         select(Memory.title, Memory.content)
         .where(Memory.title.in_(req))
-        .where(Memory.memory_simplicity <= threshold)
+        .where(Memory.memory_simplicity <= memory_simplicity)
     )
     rows = await session.execute(stmt)
     found = [{"title": r[0], "content": r[1]} for r in rows.all()]
@@ -92,28 +98,39 @@ async def fetch_word_meanings_node(state: ChatState, session: AsyncSession) -> C
     for m in found:
         existing[m["title"]] = m
     state["word_meanings"] = list(existing.values())
+    state["requested_words"] = []
     return state
 
+class AskMoreWordMeaningsAnswer(BaseMessage):
+    requested_words: List[str]
 
 async def ask_more_word_meanings_node(state: ChatState) -> ChatState:
     """
     単語の意味を付加した上で回答を試みる。
     LLM に投げて 'require_more_memory' を判定 (簡易ルール)。
     """
-    lc_messages = state.get("lc_messages", "")
-    word_defs = "\n".join(f"- {w['title']}: {w['content']}" for w in state.get("word_meanings", []))
-    prompt = f"""ユーザ入力:
-{lc_messages}
+    lc_messages = state.get("lc_messages", [])
+    lc_messages = lc_messages + [
+    SystemMessage(content=(
+        "この会話において、更に言葉の意味が必要な場合は requested_words に羅列して返せ。これ以上の意味が不要なら requested_words は空にせよ。"
+    ))]
+    word_meanings = state.get("word_meanings", [])
+    if len(word_meanings) > 0:
+        lc_messages = lc_messages + [SystemMessage(content=(
+            "既知の単語定義:\n"
+            + "\n".join(f"- {w['title']}: {w['content']}" for w in word_meanings)
+        ))]
 
-既知の単語定義:
-{word_defs or '(なし)'}
-上記を踏まえて簡潔に回答せよ。追加の外部知識が必要なら 'NEED_MORE' を末尾に付ける。
-"""
-    raw = await llm_call(prompt)
-    need_more = raw.strip().endswith("NEED_MORE")
-    answer = raw.replace("NEED_MORE", "").rstrip()
-    state["answer"] = answer
-    state["require_more_memory"] = need_more
+    out = await call_llm_with_output_type(
+        provider=state["provider"],
+        model=state["model"],
+        messages_lc=lc_messages,
+        output_structure=AskMoreWordMeaningsAnswer,
+        temperature=state.get("temperature"),
+    )
+    state["requested_words"] = out.requested_words
+    state["memory_simplicity"] = state.get("memory_simplicity", 0) + 500
+
     return state
 
 

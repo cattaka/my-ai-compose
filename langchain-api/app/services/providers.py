@@ -70,20 +70,23 @@ async def openai_stream(model: str, messages: List[Dict[str, Any]], temperature:
                 yield json.loads(data)
 
 # Ollama 直接 (非ストリーム)
-async def ollama_complete(model: str, messages_lc, temperature: float | None):
-    llm = get_llm(model=model, temperature=temperature)
+async def ollama_complete(model: str, messages_lc, output_structure: type = None, temperature: float | None = None):
+    llm = get_llm(model=model, output_structure=output_structure, temperature=temperature)
     out = await llm.ainvoke(messages_lc)
     return out
 
 # Ollama ストリーム
-async def ollama_stream(model: str, messages_lc, temperature: float | None):
-    llm = get_llm(model=model, temperature=temperature)
+async def ollama_stream(model: str, messages_lc, output_structure: type = None, temperature: float | None = None):
+    llm = get_llm(model=model, output_structure=output_structure, temperature=temperature)
     async for chunk in llm.astream(messages_lc):
         yield chunk
 
-def get_llm(model: str | None = None, **overrides):
-    return ChatOllama(
+def get_llm(model: str | None = None, output_structure: type = None, **overrides):
+    llm = ChatOllama(
         model=model or settings.DEFAULT_MODEL,
         base_url=settings.OLLAMA_BASE_URL,
         **overrides
     )
+    if output_structure:
+        llm = llm.with_structured_output(output_structure)
+    return llm

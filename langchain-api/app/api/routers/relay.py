@@ -1,10 +1,13 @@
 from __future__ import annotations
 import httpx, asyncio, json, time, datetime
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import StreamingResponse, JSONResponse
 from app.core.config import settings
+from sqlalchemy.ext.asyncio import AsyncSession
+from langchain_core.runnables.config import RunnableConfig
 
 # LangGraph (プロバイダ分岐付き) を利用
+from app.db.session import get_async_session
 from app.graph.chat_graph import get_chat_graph
 
 router = APIRouter(prefix="/api", tags=["relay"])
@@ -34,7 +37,7 @@ def _iso_now() -> str:
     return datetime.datetime.utcnow().isoformat(timespec="milliseconds") + "Z"
 
 @router.post("/chat")
-async def relay_chat(request: Request):
+async def relay_chat(request: Request, session: AsyncSession = Depends(get_async_session)):
     payload = await request.json()
     model = payload.get("model")
     messages = payload.get("messages")
@@ -50,6 +53,8 @@ async def relay_chat(request: Request):
 
     graph = get_chat_graph()
 
+    config = RunnableConfig(session=session)
+
     if not stream:
         init_state = {
             "model": model,
@@ -57,7 +62,7 @@ async def relay_chat(request: Request):
             "temperature": temperature,
             "stream": False,
         }
-        out = await graph.ainvoke(init_state)
+        out = await graph.ainvoke(init_state, config=config)
         answer = out.get("answer", "")
         resp = {
             "model": f"{out['provider']}:{out['model']}",
@@ -77,7 +82,7 @@ async def relay_chat(request: Request):
             "stream": True,
         }
         full = ""
-        async for namespace, mode, data in graph.astream(init_state, stream_mode=["custom", "values"], subgraphs=True):
+        async for namespace, mode, data in graph.astream(init_state, stream_mode=["custom", "values"], subgraphs=True, config=config):
             if mode == "custom":
                 if data.get("event_name") != "token":
                     continue
