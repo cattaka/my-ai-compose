@@ -3,6 +3,7 @@ from typing import TypedDict, List, Dict, Any, Literal
 from langgraph.config import get_stream_writer
 from langgraph.graph import StateGraph
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
+from app.graph.self_maintenance_memories_graph import build_word_meanings_prompt
 from app.services.llm import call_llm
 from app.graph.type import ChatState
 from pydantic import BaseModel
@@ -14,10 +15,7 @@ async def call_llm_node(state: ChatState) -> ChatState:
     messages_lc = state.get("lc_messages", [])
     word_meanings = state.get("word_meanings", [])
     if len(word_meanings) > 0:
-        messages_lc = messages_lc + [SystemMessage(content=(
-            "既知の単語定義:\n"
-            + "\n".join(f"- {w['title']}: {w['content']}" for w in word_meanings)
-        ))]
+        messages_lc = messages_lc + [build_word_meanings_prompt(word_meanings)]
 
     answer = await call_llm(
         provider=state["provider"],

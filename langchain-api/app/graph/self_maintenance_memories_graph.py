@@ -111,15 +111,12 @@ async def ask_more_word_meanings_node(state: ChatState) -> ChatState:
     """
     lc_messages = state.get("lc_messages", [])
     lc_messages = lc_messages + [
-    SystemMessage(content=(
-        "この会話において、更に言葉の意味が必要な場合は requested_words に羅列して返せ。これ以上の意味が不要なら requested_words は空にせよ。"
-    ))]
+        SystemMessage(content=(
+            "この会話において、更に言葉の意味が必要な場合は requested_words に羅列して返せ。これ以上の意味が不要なら requested_words は空にせよ。"
+        ))]
     word_meanings = state.get("word_meanings", [])
     if len(word_meanings) > 0:
-        lc_messages = lc_messages + [SystemMessage(content=(
-            "既知の単語定義:\n"
-            + "\n".join(f"- {w['title']}: {w['content']}" for w in word_meanings)
-        ))]
+        lc_messages = lc_messages + [build_word_meanings_prompt(word_meanings)]
 
     out = await call_llm_with_output_type(
         provider=state["provider"],
@@ -133,6 +130,15 @@ async def ask_more_word_meanings_node(state: ChatState) -> ChatState:
 
     return state
 
+def build_word_meanings_prompt(word_meanings: List[dict]) -> str:
+    return SystemMessage(content=(
+            "既知の単語定義:\n"
+            + "\n".join(f"- {w['title']}: {w['content']}" for w in word_meanings)
+        ))
+
+class AskUpdatedMemoriesAnswer(BaseMessage):
+    updated_words: List[Dict[str, str]]  # title, content
+    updated_memories: List[Dict[str, str]]  # title, content
 
 async def ask_updated_memories_node(state: ChatState) -> ChatState:
     """
@@ -140,16 +146,28 @@ async def ask_updated_memories_node(state: ChatState) -> ChatState:
     簡易: requested_words のうち未登録 = updated_words。
     updated_memories は今回は空の雛形。
     """
-    known_titles = {w["title"] for w in state.get("word_meanings", [])}
-    new_words = [
-        {"title": w, "content": ""}  # content は後で LLM で補完する想定
-        for w in state.get("requested_words", [])
-        if w not in known_titles
-    ]
-    state["updated_words"] = new_words
-    state["updated_memories"] = []  # 拡張用
-    return state
+    lc_messages = state.get("lc_messages", [])
+    lc_messages = lc_messages + [
+        SystemMessage(content=(
+            "この会話において、記憶しておくべき単語があれば updated_words に title と content を含む辞書のリストとして返せ。" \
+            "また、記憶しておくべき知識や出来事があれば updated_memories に title と content を含む辞書のリストとして返せ。" \
+            "いずれも忘れるように指示されているものは content を空にせよ。" \
+        ))]
+    word_meanings = state.get("word_meanings", [])
+    if len(word_meanings) > 0:
+        lc_messages = lc_messages + [build_word_meanings_prompt(word_meanings)]
 
+    out = await call_llm_with_output_type(
+        provider=state["provider"],
+        model=state["model"],
+        messages_lc=lc_messages,
+        output_structure=AskUpdatedMemoriesAnswer,
+        temperature=state.get("temperature"),
+    )
+
+    state["updated_words"] = out.updated_words
+    state["updated_memories"] = out.updated_memories
+    return state
 
 async def save_updated_memories_node(state: ChatState, session: AsyncSession) -> ChatState:
     """
