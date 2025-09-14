@@ -1,8 +1,11 @@
 from __future__ import annotations
-import httpx, asyncio, json
+import httpx, asyncio, json, time, datetime
 from fastapi import APIRouter, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from app.core.config import settings
+
+# LangGraph (プロバイダ分岐付き) を利用
+from app.graph.provider_chat_graph import get_chat_graph
 
 router = APIRouter(prefix="/api", tags=["relay"])
 
@@ -27,23 +30,102 @@ async def relay_ps():
         return Response(content=r.content, status_code=r.status_code,
                         media_type=r.headers.get("content-type", "application/json"))
 
+def _iso_now() -> str:
+    return datetime.datetime.utcnow().isoformat(timespec="milliseconds") + "Z"
+
 @router.post("/chat")
 async def relay_chat(request: Request):
-    body = await request.body()
-    headers = {"Content-Type": "application/json"}
+    payload = await request.json()
+    model = payload.get("model")
+    messages = payload.get("messages")
+    prompt = payload.get("prompt")
+
+    if not messages and prompt:
+        messages = [{"role": "user", "content": prompt}]
+    if not messages:
+        return JSONResponse({"error": "messages or prompt required"}, status_code=400)
+
+    stream = payload.get("stream", True)
+    temperature = (payload.get("options") or {}).get("temperature") or payload.get("temperature") or 0.7
+
+    graph = get_chat_graph()
+
+    if not stream:
+        init_state = {
+            "model": model,
+            "raw_messages": messages,
+            "temperature": temperature,
+            "stream": False,
+        }
+        out = await graph.ainvoke(init_state)
+        answer = out.get("answer", "")
+        resp = {
+            "model": f"{out['provider']}:{out['model']}",
+            "created_at": _iso_now(),
+            "message": {"role": "assistant", "content": answer},
+            "done": True,
+            "total_duration": 0,
+        }
+        return JSONResponse(resp)
 
     async def gen():
-        async with httpx.AsyncClient(base_url=settings.OLLAMA_BASE_URL, timeout=60) as client:
-            async with client.stream("POST", "/api/chat", content=body, headers=headers) as resp:
-                if resp.status_code != 200:
-                    text = await resp.aread()
-                    yield f"data: {json.dumps({'error': text.decode('utf-8','ignore')})}\n\n"
-                    return
-                try:
-                    async for chunk in resp.aiter_bytes():
-                        yield chunk
-                        await asyncio.sleep(0)
-                except (httpx.ReadError, httpx.StreamClosed):
-                    return
-    return StreamingResponse(gen(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"})
+        start = time.perf_counter()
+        init_state = {
+            "model": model,
+            "raw_messages": messages,
+            "temperature": temperature,
+            "stream": True,
+        }
+        full = ""
+        async for mode, data in graph.astream(init_state, stream_mode=["custom", "values"]):
+            if mode == "custom":
+                if data.get("event_name") != "token":
+                    continue
+                delta = data.get("delta")
+                if not delta:
+                    continue
+                full += delta
+                # Ollama /api/chat 互換: chunk は message + done:false
+                chunk = {
+                    "model": f"{data.get('provider')}:{data.get('model')}",
+                    "created_at": _iso_now(),
+                    "message": {"role": "assistant", "content": delta},
+                    "done": False,
+                }
+                yield (json.dumps(chunk, ensure_ascii=False) + "\n").encode()
+            elif mode == "values":
+                # 最終スナップショット (answer が state に格納)
+                if "answer" not in data:
+                    continue
+                final_answer = data["answer"]
+                full = final_answer  # 念のため同期
+                final_line = {
+                    "model": f"{data.get('provider')}:{data.get('model')}",
+                    "created_at": _iso_now(),
+                    # 最終行で全文をもう一度 message で流したい場合は以下を有効に:
+                    "message": {"role": "assistant", "content": final_answer},
+                    "done": True,
+                    "total_duration": int((time.perf_counter() - start) * 1e9),
+                }
+                yield (json.dumps(final_line, ensure_ascii=False) + "\n").encode()
+
+        # 念のため done:true が未送出なら送る (冪等)
+        # （上の values ブロックで送れていればこの分はクライアント側で無視される）
+        tail = {
+            "model": f"{data.get('provider')}:{data.get('model')}",
+            "created_at": _iso_now(),
+            "message": {"role": "assistant", "content": full},
+            "done": True,
+            "total_duration": int((time.perf_counter() - start) * 1e9),
+        }
+        yield (json.dumps(tail, ensure_ascii=False) + "\n").encode()
+
+    return StreamingResponse(
+        gen(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
