@@ -5,7 +5,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from app.core.config import settings
 
 # LangGraph (プロバイダ分岐付き) を利用
-from app.graph.provider_chat_graph import get_chat_graph
+from app.graph.chat_graph import get_chat_graph
 
 router = APIRouter(prefix="/api", tags=["relay"])
 

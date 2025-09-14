@@ -5,11 +5,11 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from app.core.config import settings
-from app.graph.provider_chat_graph import (
+from app.services.providers import resolve_provider  # ルータ外表示用 (model name 統一のため)
+from app.graph.chat_graph import (
     run_chat_graph,
     stream_chat_graph,
 )
-from app.services.providers import resolve_provider  # ルータ外表示用 (model name 統一のため)
 
 router = APIRouter(prefix="/v1/chat", tags=["chat"])
 
