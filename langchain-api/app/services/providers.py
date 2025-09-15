@@ -5,6 +5,8 @@ from typing import AsyncGenerator, List, Dict, Any
 
 from langchain_ollama import ChatOllama
 from app.core.config import settings
+from openai import OpenAI
+from openai.types.chat import ChatCompletionMessageParam
 
 # 判定ユーティリティ
 def resolve_provider(model: str | None, explicit: str | None) -> tuple[str, str]:
@@ -30,24 +32,29 @@ def resolve_provider(model: str | None, explicit: str | None) -> tuple[str, str]
     return default_provider, model
 
 # OpenAI 呼び出し（非ストリーム）
-async def openai_complete(model: str, messages: List[Dict[str, Any]], temperature: float | None):
-    headers = {
-        "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
-        "stream": False,
-    }
-    async with httpx.AsyncClient(base_url=settings.OPENAI_BASE_URL, timeout=60) as client:
-        r = await client.post("/chat/completions", json=payload)
-        r.raise_for_status()
-        return r.json()
+async def openai_complete(model: str, messages: List[ChatCompletionMessageParam], output_structure: type = None, temperature: float | None = None):
+    client = OpenAI(
+        api_key=settings.OPENAI_API_KEY
+    )
+
+    if output_structure:
+        response = client.chat.completions.parse(
+            model=model,
+            messages=messages,
+            temperature=1, # The error sayed Only the default (1) value is supported.
+            response_format=output_structure
+        )
+    else:
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=1, # The error sayed Only the default (1) value is supported.
+            stream=False
+        )
+    return response
 
 # OpenAI ストリーミング (SSE 風)
-async def openai_stream(model: str, messages: List[Dict[str, Any]], temperature: float | None) -> AsyncGenerator[Dict[str, Any], None]:
+async def openai_stream(model: str, messages: List[ChatCompletionMessageParam], temperature: float | None) -> AsyncGenerator[Dict[str, Any], None]:
     headers = {
         "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
         "Content-Type": "application/json",

@@ -16,7 +16,13 @@ router = APIRouter(prefix="/api", tags=["relay"])
 async def relay_tags():
     async with httpx.AsyncClient(base_url=settings.OLLAMA_BASE_URL) as client:
         r = await client.get("/api/tags")
-        return Response(content=r.content, status_code=r.status_code,
+        data = r.json()
+        models = data.get("models", [])
+        if isinstance(data["models"], list) and settings.OPENAI_API_KEY:
+            models.append({"name": "openai:gpt-5-nano", "model": "openai:gpt-5-nano", "modified_at": "2025-08-30T09:30:39.274104826Z", "size": 0, "digest": ""})
+            models.append({"name": "openai:gpt-5-mini", "model": "openai:gpt-5-mini", "modified_at": "2025-08-30T09:30:39.274104826Z", "size": 0, "digest": ""})
+        content = json.dumps({"models": models}, ensure_ascii=False)
+        return Response(content=content, status_code=r.status_code,
                         media_type=r.headers.get("content-type", "application/json"))
 
 @router.get("/version")

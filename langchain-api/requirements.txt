@@ -11,3 +11,4 @@ alembic
 asyncpg
 psycopg
 langgraph
+openai

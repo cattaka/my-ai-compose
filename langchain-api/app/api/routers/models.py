@@ -19,6 +19,10 @@ async def list_models():
                 models.append({"id": name, "object": "model", "created": 0, "owned_by": "ollama"})
         if not models:
             models = [{"id": settings.DEFAULT_MODEL, "object": "model", "created": 0, "owned_by": "ollama"}]
+        if settings.OPENAI_API_KEY:
+            models.append({"id": "openai:gpt-5-mini", "object": "model", "created": 0, "owned_by": "openai"})
+            models.append({"id": "openai:gpt-5-nano", "object": "model", "created": 0, "owned_by": "openai"})
+
         return {"object": "list", "data": models}
     except Exception:
         return {"object": "list", "data": [{"id": settings.DEFAULT_MODEL, "object": "model", "created": 0, "owned_by": "ollama"}]}

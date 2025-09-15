@@ -31,8 +31,7 @@ def prepare_node(state: ChatState) -> ChatState:
     state["provider"] = provider
     state["model"] = pure
     state.setdefault("partial_answer", "")
-    if provider == "ollama":
-        state["lc_messages"] = _to_lc_messages(state["raw_messages"])
+    state["lc_messages"] = _to_lc_messages(state["raw_messages"])
     return state
 
 # ---- 親グラフ ----

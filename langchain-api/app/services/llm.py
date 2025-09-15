@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 from langchain_ollama.chat_models import ChatOllama
 from app.core.config import settings
 from typing import List
@@ -10,18 +11,27 @@ from app.services.providers import (
     ollama_complete,
     ollama_stream,
 )
+from openai.types.chat import (
+    ChatCompletionMessageParam,
+    ChatCompletionDeveloperMessageParam,
+    ChatCompletionSystemMessageParam,
+    ChatCompletionUserMessageParam,
+    ChatCompletionAssistantMessageParam,
+    ChatCompletionToolMessageParam,
+    ChatCompletionFunctionMessageParam
+)
 
 async def call_llm(provider: str, model: str, messages_lc: List[BaseMessage], temperature: float | None, stream: bool) -> str:
     answer = ""
     if provider == "openai":
+        converted_messages = convert_messages_to_chat_completion_param(messages_lc)
         if stream:
-            answer = await _call_openai_async(model=model, messages_lc=messages_lc, output_structure=None, temperature=temperature)
+            answer = await _call_openai_async(model=model, messages_lc=converted_messages, temperature=temperature)
         else:
-            out = await _call_openai_sync(model=model, messages_lc=messages_lc, output_structure=None, temperature=temperature)
-            answer = getattr(out, "content", "")
+            answer = await _call_openai_sync(model=model, messages_lc=converted_messages, output_structure=None, temperature=temperature)
     elif provider == "ollama":
         if stream:
-            answer = await _call_ollama_async(model=model, messages_lc=messages_lc, output_structure=None, temperature=temperature)
+            answer = await _call_ollama_async(model=model, messages_lc=messages_lc, temperature=temperature)
         else:
             out = await _call_ollama_sync(model=model, messages_lc=messages_lc, output_structure=None, temperature=temperature)
             answer = getattr(out, "content", "")
@@ -32,56 +42,70 @@ async def call_llm(provider: str, model: str, messages_lc: List[BaseMessage], te
 # output_type を指定した場合はstreamはFalse固定
 async def call_llm_with_output_type(provider: str, model: str, messages_lc: List[BaseMessage], output_structure: type, temperature: float | None):
     if provider == "openai":
-        answer = await _call_openai_sync(model=model, messages_lc=messages_lc, output_structure=output_structure, temperature=temperature)
+        converted_messages = convert_messages_to_chat_completion_param(messages_lc)
+        answer = await _call_openai_sync(model=model, messages_lc=converted_messages, output_structure=output_structure, temperature=temperature)
     elif provider == "ollama":
         answer = await _call_ollama_sync(model=model, messages_lc=messages_lc, output_structure=output_structure, temperature=temperature)
     else:
         raise ValueError(f"Unsupported provider: {provider}")
     return answer
 
-async def _call_openai_sync(model: str, messages_lc: List[BaseMessage], output_structure: type = None, temperature: float | None = None) -> str:
-    # TODO: output_structure 未対応
+async def _call_openai_sync(model: str, messages_lc: List[ChatCompletionMessageParam], output_structure: type = None, temperature: float | None = None) -> str:
     data = await openai_complete(
         model=model,
         messages=messages_lc,
+        output_structure=output_structure,
         temperature=temperature,
     )
     answer = ""
     try:
-        ch = data.get("choices", [])
-        if ch:
-            answer = ch[0]["message"]["content"]
+        answer = data.choices[0].message.content
+        if output_structure:
+            answer = output_structure.model_validate_json(answer)
+        else:
+            answer = {"content": answer}
     except Exception:
         answer = ""
-    return {"content": answer}
+    return answer
 
-async def _call_openai_async(model: str, messages_lc: List[BaseMessage], output_structure: type = None, temperature: float | None = None) -> str:
-    # TODO: output_structure 未対応
+async def _call_openai_async(model: str, messages_lc: List[BaseMessage], temperature: float | None = None) -> str:
+    # writer = get_stream_writer()
+    # partial = ""
+    # async for ev in openai_stream(
+    #     model=model,
+    #     messages=messages_lc,
+    #     temperature=temperature,
+    # ):
+    #     choices = ev.get("choices", [])
+    #     if not choices:
+    #         continue
+    #     delta = choices[0].get("delta", {}).get("content")
+    #     if not delta:
+    #         continue
+    #     partial += delta
+    #     # event_name 追加
+    #     writer({
+    #         "event_name": "token",
+    #         "provider": "openai",
+    #         "model": model,
+    #         "delta": delta,
+    #         "partial": partial,
+    #     })
+    # return partial
+    
+    # 一旦 syncのもので仮実装
+    out = await _call_openai_sync(model=model, messages_lc=messages_lc, output_structure=None, temperature=temperature)
     writer = get_stream_writer()
-    partial = ""
-    async for ev in openai_stream(
-        model=model,
-        messages=messages_lc,
-        temperature=temperature,
-    ):
-        choices = ev.get("choices", [])
-        if not choices:
-            continue
-        delta = choices[0].get("delta", {}).get("content")
-        if not delta:
-            continue
-        partial += delta
-        # event_name 追加
-        writer({
-            "event_name": "token",
-            "provider": "openai",
-            "model": model,
-            "delta": delta,
-            "partial": partial,
-        })
-    return partial
+    writer({
+        "event_name": "token",
+        "provider": "openai",
+        "model": model,
+        "delta": out["content"],
+        "partial": out["content"],
+    })
+    return out["content"]
 
-async def _call_ollama_sync(model: str, messages_lc: List[BaseMessage], output_structure: type = None, temperature: float | None = None) -> str:
+async def _call_ollama_sync(model: str, messages_lc: List[BaseMessage], output_structure: type = None, temperature: float | None = None):
     out = await ollama_complete(
         model=model,
         messages_lc=messages_lc,
@@ -90,13 +114,13 @@ async def _call_ollama_sync(model: str, messages_lc: List[BaseMessage], output_s
     )
     return out
 
-async def _call_ollama_async(model: str, messages_lc: List[BaseMessage], output_structure: type = None, temperature: float | None = None) -> str:
+async def _call_ollama_async(model: str, messages_lc: List[BaseMessage], temperature: float | None = None) -> str:
     writer = get_stream_writer()
     partial = ""
     async for chunk in ollama_stream(
         model=model,
         messages_lc=messages_lc,
-        output_structure=output_structure,
+        output_structure=None,
         temperature=temperature,
     ):
         delta = getattr(chunk, "content", "")
@@ -111,3 +135,24 @@ async def _call_ollama_async(model: str, messages_lc: List[BaseMessage], output_
             "partial": partial,
         })
     return partial
+
+def convert_messages_to_chat_completion_param(src: List[BaseMessage]) -> List[ChatCompletionMessageParam]:
+    ret: List[ChatCompletionMessageParam] = []
+    # ChatCompletionDeveloperMessageParam,
+    # ChatCompletionSystemMessageParam,
+    # ChatCompletionUserMessageParam,
+    # ChatCompletionAssistantMessageParam,
+    # ChatCompletionToolMessageParam,
+    # ChatCompletionFunctionMessageParam,
+
+    for msg in src:
+        role = msg.type
+        if role == "system":
+            ret.append(ChatCompletionSystemMessageParam(role="system", content=msg.content))
+        elif role == "human":
+            ret.append(ChatCompletionUserMessageParam(role="user", content=msg.content))
+        elif role == "ai":
+            ret.append(ChatCompletionAssistantMessageParam(role="assistant", content=msg.content))
+        else:
+            ret.append(ChatCompletionUserMessageParam(role="user", content=msg.content))
+    return ret

@@ -2,12 +2,13 @@ from __future__ import annotations
 from typing import TypedDict, List, Dict, Any, Optional, Literal
 from langgraph.graph import StateGraph
 from langgraph.config import get_stream_writer  # 使うなら (今は未使用)
-from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
+from langchain_core.messages import SystemMessage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.graph.type import ChatState
 from app.services.llm import call_llm_with_output_type
 from langchain_core.runnables.config import RunnableConfig
+from pydantic import BaseModel
 
 # --- DB Models ---
 from app.db.models.memory import Memory, mark_memory_as_deleted, select_active_memories, select_active_memory_titles, upsert_memory  # id, title, content, memory_simplicity,...
@@ -38,7 +39,7 @@ async def fetch_wellknown_words_node(state: ChatState, config: RunnableConfig) -
     state["wellknown_words"] = await select_active_memory_titles(session, memory_simplicity)
     return state
 
-class AskWordMeaningsAnswer(BaseMessage):
+class AskWordMeaningsAnswer(BaseModel):
     requested_words: List[str]
 
 async def ask_word_meanings_node(state: ChatState) -> ChatState:
@@ -91,7 +92,7 @@ async def fetch_word_meanings_node(state: ChatState, config: RunnableConfig) -> 
     state["requested_words"] = []
     return state
 
-class AskMoreWordMeaningsAnswer(BaseMessage):
+class AskMoreWordMeaningsAnswer(BaseModel):
     requested_words: List[str]
 
 async def ask_more_word_meanings_node(state: ChatState) -> ChatState:
@@ -126,11 +127,11 @@ def build_word_meanings_prompt(word_meanings: List[dict]) -> str:
             + "\n".join(f"- {w['title']}: {w['content']}" for w in word_meanings)
         ))
 
-class WordDefinition(BaseMessage):
+class WordDefinition(BaseModel):
     title: str
     content: str
 
-class AskUpdatedMemoriesAnswer(BaseMessage):
+class AskUpdatedMemoriesAnswer(BaseModel):
     updated_words: List[WordDefinition]
     updated_memories: List[WordDefinition]
 
