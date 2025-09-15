@@ -48,6 +48,8 @@ services:
     depends_on:
       - ollama
       - postgres            # added so API waits for postgres
+    env_file:
+      - ./langchain-api/.env.local
     environment:
       - OLLAMA_BASE_URL=http://ollama:11434
       - DEFAULT_MODEL=llama3.1
