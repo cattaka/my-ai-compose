@@ -132,6 +132,10 @@ def convert_messages_to_chat_completion_param(src: List[BaseMessage]) -> List[Ch
             ret.append(ChatCompletionUserMessageParam(role="user", content=msg.content))
         elif role == "ai":
             ret.append(ChatCompletionAssistantMessageParam(role="assistant", content=msg.content))
+        elif role == "tool":
+            ret.append(ChatCompletionToolMessageParam(role="tool", content=msg.content))
+        elif role == "function":
+            ret.append(ChatCompletionFunctionMessageParam(role="function", content=msg.content))
         else:
             ret.append(ChatCompletionUserMessageParam(role="user", content=msg.content))
     return ret

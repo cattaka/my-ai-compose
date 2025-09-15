@@ -70,12 +70,12 @@ class MemoryRelation(Base):
     parent = relationship("Memory", foreign_keys=[parent_id], back_populates="children")
     child = relationship("Memory", foreign_keys=[child_id], back_populates="parents")
 
-async def select_active_memory_titles(session: AsyncSession, memory_simplicity: int) -> list[str]:
-    stmt = select(Memory.title).where(Memory.memory_simplicity <= memory_simplicity).where(Memory.deleted_at == None)
+async def select_active_memorys_by_memory_simplicity(session: AsyncSession, memory_simplicity: int) -> list[str]:
+    stmt = select(Memory.title, Memory.memory_simplicity).where(Memory.memory_simplicity <= memory_simplicity).where(Memory.deleted_at == None)
     stmt = stmt.distinct().order_by(Memory.title)
 
     result = await session.execute(stmt)
-    return result.scalars().all()
+    return result.all()
 
 async def select_active_memories(session: AsyncSession, titles: list[str], memory_simplicity: int) -> list[Memory]:
     if not titles:

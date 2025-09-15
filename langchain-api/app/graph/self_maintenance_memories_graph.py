@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import TypedDict, List, Dict, Any, Optional, Literal
 from langgraph.graph import StateGraph
 from langgraph.config import get_stream_writer  # 使うなら (今は未使用)
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import SystemMessage, HumanMessage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.graph.type import ChatState
@@ -11,7 +11,7 @@ from langchain_core.runnables.config import RunnableConfig
 from pydantic import BaseModel
 
 # --- DB Models ---
-from app.db.models.memory import Memory, mark_memory_as_deleted, select_active_memories, select_active_memory_titles, upsert_memory  # id, title, content, memory_simplicity,...
+from app.db.models.memory import Memory, mark_memory_as_deleted, select_active_memories, select_active_memorys_by_memory_simplicity, upsert_memory  # id, title, content, memory_simplicity,...
 
 # --- LLM (任意: プロジェクト既存の provider 解決を流用してもよい) ---
 # ここでは抽象インターフェースだけ定義し、実装は後で差し替え
@@ -36,7 +36,28 @@ async def fetch_wellknown_words_node(state: ChatState, config: RunnableConfig) -
 
     memory_simplicity = state.get("memory_simplicity", 0)
 
-    state["wellknown_words"] = await select_active_memory_titles(session, memory_simplicity)
+    wellknown_words = []
+    wellknown_memories = []
+    for m in await select_active_memorys_by_memory_simplicity(session, 500):
+        if m.memory_simplicity == 0:
+            wellknown_words.append(m.title)
+        else:
+            wellknown_memories.append(m.title)
+
+    state["wellknown_words"] = wellknown_words
+    state["wellknown_memories"] = wellknown_memories
+
+    lc_messages = state.get("lc_messages", [])
+    lc_messages = lc_messages + [
+        SystemMessage(content=(
+            "既知の単語と記録の名称を次に列挙する。\n"
+            + "単語:"
+            + "\n".join(f"- {w}" for w in wellknown_words)
+            + "\n記録:"
+            + "\n".join(f"- {w}" for w in wellknown_memories)
+        ))
+    ]
+    state["lc_messages"] = lc_messages
     return state
 
 class AskWordMeaningsAnswer(BaseModel):
@@ -48,16 +69,17 @@ async def ask_word_meanings_node(state: ChatState) -> ChatState:
     wellknown_words に含まれない単語を requested_words にする。
     """
     wellknown_words = state.get("wellknown_words", [])
-    if wellknown_words is None:
+    wellknown_memories = state.get("wellknown_memories", [])
+    if wellknown_words is None and wellknown_memories is None:
         wellknown_words = []
         state["requested_words"] = []
         return state
     lc_messages = state.get("lc_messages", [])
     lc_messages = lc_messages + [
-    SystemMessage(content=(
-        "次の単語は既知である。この会話において意味の取得が必要なものを列挙せよ。\n"
-        + "\n".join(f"- {w}" for w in wellknown_words)
-    ))]
+        SystemMessage(content=(
+            "列挙されている既知の単語と記録の名称から、この会話において意味の取得が必要なものを列挙せよ。"
+        ))
+    ]
 
     out = await call_llm_with_output_type(
         provider=state["provider"],
@@ -90,6 +112,13 @@ async def fetch_word_meanings_node(state: ChatState, config: RunnableConfig) -> 
         existing[m["title"]] = m
     state["word_meanings"] = list(existing.values())
     state["requested_words"] = []
+
+    word_meanings = state.get("word_meanings", [])
+    if len(word_meanings) > 0:
+        lc_messages = state.get("lc_messages", [])
+        lc_messages = lc_messages + [build_word_meanings_prompt(word_meanings)]
+        state["lc_messages"] = lc_messages
+
     return state
 
 class AskMoreWordMeaningsAnswer(BaseModel):
@@ -105,9 +134,6 @@ async def ask_more_word_meanings_node(state: ChatState) -> ChatState:
         SystemMessage(content=(
             "この会話において、更に言葉の意味が必要な場合は requested_words に羅列して返せ。これ以上の意味が不要なら requested_words は空にせよ。"
         ))]
-    word_meanings = state.get("word_meanings", [])
-    if len(word_meanings) > 0:
-        lc_messages = lc_messages + [build_word_meanings_prompt(word_meanings)]
 
     out = await call_llm_with_output_type(
         provider=state["provider"],
@@ -123,7 +149,7 @@ async def ask_more_word_meanings_node(state: ChatState) -> ChatState:
 
 def build_word_meanings_prompt(word_meanings: List[dict]) -> str:
     return SystemMessage(content=(
-            "既知の単語定義:\n"
+            "この会話に関連する言葉の意味:\n"
             + "\n".join(f"- {w['title']}: {w['content']}" for w in word_meanings)
         ))
 
@@ -144,16 +170,12 @@ async def ask_updated_memories_node(state: ChatState) -> ChatState:
     lc_messages = state.get("lc_messages", [])
     lc_messages = lc_messages + [
         SystemMessage(content=(
-            "In this conversation, if there are proper nouns or words with distinctive meanings that should be remembered, return them as a list of dictionaries with the name in the title field and the description in the content field of updated_words." \
-            "Additionally, if there are pieces of knowledge or events that should be remembered, return them as a list of dictionaries with the name in the title field and the description in the content field of updated_memories." \
-            "For items instructed to be deleted, set the content to an empty string." \
-            # "この会話において、記憶しておくべき固有名詞や特徴的な意味の単語があれば updated_words の title に名前を、 content に説明を含む辞書のリストとして返せ。" \
-            # "また、記憶しておくべき知識や出来事があれば updated_memories の title に名前を、 content に説明を含む辞書のリストとして返せ。" \
-            # "削除するように指示されたものには content を空文字列を指定せよ。" \
+            "この会話における、あなたの知らなかった固有名詞や特徴的な意味の単語や、記憶しておくべき知識や出来事を記録したいです。" \
+            "記録すべき単語は updated_words の title に名前を、 content に説明を含む辞書のリストとして返せ。" \
+            "記録すべき知識や出来事は updated_memories の title に名前を、 content に説明を含む辞書のリストとして返せ。" \
+            "ここで指定した title は今後の会話で参照されるため、あなたが識別しやすい名前をつけよ。" \
+            "不要なものや削除するように指示されたものには content を空文字列を指定せよ。" \
         ))]
-    word_meanings = state.get("word_meanings", [])
-    if len(word_meanings) > 0:
-        lc_messages = lc_messages + [build_word_meanings_prompt(word_meanings)]
 
     out = await call_llm_with_output_type(
         provider=state["provider"],
