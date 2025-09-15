@@ -146,3 +146,33 @@ NAMING_CONVENTION = {
 - [ ] env.py で models import
 - [ ] autogenerate 差分を毎回レビュー
 - [ ] 本番は自動 upgrade の多重実行を防止
+
+---
+
+## Self-Maintenance Memories フロー開発メモ (更新)
+
+最新フローは self-maintenance-memories.md / *.mermaid を参照。
+
+### 実行例 (LangGraph)
+
+```python
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.graph.self_maintenance_memories_graph import get_memory_graph
+
+async def run_flow(session: AsyncSession, text: str):
+    graph = get_memory_graph()
+    init_state = {
+        "user_text": text,
+        "memory_simplicity": 0,
+        "max_memory_simplicity": 1000,
+    }
+    result = await graph.ainvoke(
+        init_state,
+        config={"configurable": {"session": session}}  # session 注入
+    )
+    return {
+        "answer": result.get("answer"),
+        "updated_words": result.get("updated_words"),
+        "updated_memories": result.get("updated_memories"),
+    }
+```

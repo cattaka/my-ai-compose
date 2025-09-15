@@ -76,19 +76,60 @@
 ---
 
 ## 7. メモリ自己維持フロー (self-maintenance-memories)
-State キー:
-- user_input
-- memory_simplicity (0 / 500 / 1000 段階)
-- known_words / unknown_words
-- requested_memories
-- require_more_memory (bool)
-- new_terms / new_knowledge
-- answer
 
-条件:
-- require_more_memory かつ memory_simplicity < 1000 → escalate ループ
-- unknown_words はトークン抽出差集合
-- update_memories: unknown_words から新規候補生成（書き込みは安全ゲート内）
+更新: self-maintenance-memories.md の最新仕様に合わせて整理。
+
+State キー (現行):
+- user_text                    : ユーザ入力
+- memory_simplicity            : 現在の知識解放レベル (0 / 500 / 1000 段階)
+- max_memory_simplicity        : 上限 (既定 1000)
+- wellknown_words              : simplicity=0 の既知語タイトル一覧
+- requested_words              : 未知語候補 (抽出済みで意味取得前)
+- word_meanings                : 取得できた語義 [{title, content}]
+- updated_words                : 新規登録候補語句 (simplicity=0 で保存予定)
+- updated_memories             : 複合知識候補 (simplicity=500 想定 / 将来拡張)
+- require_more_memory          : 追加知識が必要か (True なら段階エスカレーション)
+- answer                       : 最終回答
+- notes                        : デバッグ / 補足用メモ
+- error                        : 例外 / 失敗理由
+
+主要ノード:
+1. fetch_wellknown_words_node  
+   - 基本既知語 (simplicity<=0) を読み込み初期化
+2. ask_word_meanings_node  
+   - 入力からトークン化し既知語差集合 → requested_words
+3. fetch_word_meanings_node  
+   - 現在 memory_simplicity の閾値以下で語義を取得し word_meanings マージ
+4. ask_more_word_meanings_node  
+   - 取得済み語義込みで一度回答試行。末尾 NEED_MORE 判定等で require_more_memory 設定
+5. (条件) escalate ループ  
+   - require_more_memory=True かつ memory_simplicity < max_memory_simplicity  
+   - memory_simplicity を +500 して 3→4 を再試行
+6. ask_updated_memories_node  
+   - 未解決語を updated_words/updated_memories に振り分け
+7. save_updated_memories_node  
+   - Upsert (既存タイトル除外) / トランザクション制御
+8. finalize_node  
+   - answer / メタ整形
+
+ループ条件:
+require_more_memory AND memory_simplicity < max_memory_simplicity → escalate (+500)  
+(0 → 500 → 1000 の最大 2 回追加試行)
+
+設計指針:
+- DB 書き込みは save_updated_memories_node に集約（副作用分離）
+- 途中ノードは副作用なしで再試行安全
+- state に AsyncSession を直接入れない（configurable.session 注入 or クロージャ）
+- unknown/known の二値から段階 (0/500/1000) へ拡張し粒度制御
+- LLM 判定 (NEED_MORE) は短いトークン記号で明示（再プロンプト容易）
+
+将来拡張 TODO:
+- updated_memories の自動要約生成
+- memory_simplicity >1000 (圧縮 / 高抽象レベル) レイヤ
+- 語義取得の形態素解析強化
+- 重複・冗長メモリの圧縮ノード追加
+
+Mermaid 図は self-maintenance-memories.mermaid を参照。  
 
 ---
 
