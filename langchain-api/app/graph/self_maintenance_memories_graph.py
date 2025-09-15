@@ -143,9 +143,12 @@ async def ask_updated_memories_node(state: ChatState) -> ChatState:
     lc_messages = state.get("lc_messages", [])
     lc_messages = lc_messages + [
         SystemMessage(content=(
-            "この会話において、記憶しておくべき単語があれば updated_words に title と content を含む辞書のリストとして返せ。" \
-            "また、記憶しておくべき知識や出来事があれば updated_memories に title と content を含む辞書のリストとして返せ。" \
-            "削除するように指示されたものには content を空文字列を指定せよ。" \
+            "In this conversation, if there are proper nouns or words with distinctive meanings that should be remembered, return them as a list of dictionaries with the name in the title field and the description in the content field of updated_words." \
+            "Additionally, if there are pieces of knowledge or events that should be remembered, return them as a list of dictionaries with the name in the title field and the description in the content field of updated_memories." \
+            "For items instructed to be deleted, set the content to an empty string." \
+            # "この会話において、記憶しておくべき固有名詞や特徴的な意味の単語があれば updated_words の title に名前を、 content に説明を含む辞書のリストとして返せ。" \
+            # "また、記憶しておくべき知識や出来事があれば updated_memories の title に名前を、 content に説明を含む辞書のリストとして返せ。" \
+            # "削除するように指示されたものには content を空文字列を指定せよ。" \
         ))]
     word_meanings = state.get("word_meanings", [])
     if len(word_meanings) > 0:

@@ -100,26 +100,27 @@ async def relay_chat(request: Request, session: AsyncSession = Depends(get_async
                 yield (json.dumps(chunk, ensure_ascii=False) + "\n").encode()
             elif mode == "values":
                 # 最終スナップショット (answer が state に格納)
-                if "answer" not in data:
-                    continue
-                final_answer = data["answer"]
-                full = final_answer  # 念のため同期
-                final_line = {
-                    "model": f"{data.get('provider')}:{data.get('model')}",
-                    "created_at": _iso_now(),
-                    # 最終行で全文をもう一度 message で流したい場合は以下を有効に:
-                    "message": {"role": "assistant", "content": final_answer},
-                    "done": True,
-                    "total_duration": int((time.perf_counter() - start) * 1e9),
-                }
-                yield (json.dumps(final_line, ensure_ascii=False) + "\n").encode()
+                # if "answer" not in data:
+                #     continue
+                # final_answer = data["answer"]
+                # full = final_answer  # 念のため同期
+                # final_line = {
+                #     "model": f"{data.get('provider')}:{data.get('model')}",
+                #     "created_at": _iso_now(),
+                #     # 最終行で全文をもう一度 message で流したい場合は以下を有効に:
+                #     "message": {"role": "assistant", "content": final_answer},
+                #     "done": False,
+                #     "total_duration": int((time.perf_counter() - start) * 1e9),
+                # }
+                # yield (json.dumps(final_line, ensure_ascii=False) + "\n").encode()
+                pass
 
         # 念のため done:true が未送出なら送る (冪等)
         # （上の values ブロックで送れていればこの分はクライアント側で無視される）
         tail = {
             "model": f"{data.get('provider')}:{data.get('model')}",
             "created_at": _iso_now(),
-            "message": {"role": "assistant", "content": full},
+            "message": {"role": "assistant", "content": ""},
             "done": True,
             "total_duration": int((time.perf_counter() - start) * 1e9),
         }
