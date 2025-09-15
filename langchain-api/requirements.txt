@@ -2,6 +2,7 @@ pydantic
 langchain
 langchain-community
 langchain-core
+langchain-ollama
 aiohttp
 fastapi
 uvicorn
