@@ -3,7 +3,7 @@ from typing import TypedDict, List, Dict, Any, Literal
 from langgraph.graph import StateGraph
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
 from typing import AsyncGenerator
-from app.graph.self_maintenance_memories_graph import ask_more_word_meanings_node, ask_updated_memories_node, ask_word_meanings_node, fetch_wellknown_words_node, fetch_word_meanings_node
+from app.graph.self_maintenance_memories_graph import ask_more_word_meanings_node, ask_updated_memories_node, ask_word_meanings_node, fetch_wellknown_words_node, fetch_word_meanings_node, save_updated_memories_node
 from langchain_core.runnables import RunnableLambda, RunnableConfig
 from app.graph.type import ChatState
 from app.graph.provider_chat_graph import call_llm_node
@@ -48,6 +48,7 @@ def get_chat_graph():
     g.add_node("fetch_word_meanings_node", RunnableLambda(fetch_word_meanings_node))
     g.add_node("ask_more_word_meanings_node", ask_more_word_meanings_node)
     g.add_node("ask_updated_memories_node", ask_updated_memories_node)
+    g.add_node("save_updated_memories_node", RunnableLambda(save_updated_memories_node))
     g.add_node("call_llm_node", call_llm_node)
     g.add_node("finalize_node", finalize_node)
 
@@ -58,7 +59,8 @@ def get_chat_graph():
     g.add_edge("ask_word_meanings_node", "fetch_word_meanings_node")
     g.add_edge("fetch_word_meanings_node", "ask_more_word_meanings_node")
     g.add_edge("ask_more_word_meanings_node", "ask_updated_memories_node")
-    g.add_edge("ask_updated_memories_node", "call_llm_node")
+    g.add_edge("ask_updated_memories_node", "save_updated_memories_node")
+    g.add_edge("save_updated_memories_node", "call_llm_node")
     g.add_edge("call_llm_node", "finalize_node")
     g.add_edge("finalize_node", "__end__")
     _graph = g.compile()

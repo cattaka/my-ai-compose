@@ -9,4 +9,5 @@ httpx
 SQLAlchemy
 alembic
 asyncpg
+psycopg
 langgraph

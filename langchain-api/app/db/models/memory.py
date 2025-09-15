@@ -1,7 +1,8 @@
 from __future__ import annotations
 from sqlalchemy import (
-    String, Integer, DateTime, func, ForeignKey, Index
+    String, Integer, DateTime, func, ForeignKey, Index, Boolean, select
 )
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.session import Base
 
@@ -23,6 +24,9 @@ class Memory(Base):
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False
+    )
+    deleted_at: Mapped["DateTime | None"] = mapped_column(  # 追加
+        DateTime(timezone=True), nullable=True, index=True
     )
 
     # 子 = 自分を親とする関係
@@ -65,3 +69,70 @@ class MemoryRelation(Base):
 
     parent = relationship("Memory", foreign_keys=[parent_id], back_populates="children")
     child = relationship("Memory", foreign_keys=[child_id], back_populates="parents")
+
+async def select_active_memory_titles(session: AsyncSession, memory_simplicity: int) -> list[str]:
+    stmt = select(Memory.title).where(Memory.memory_simplicity <= memory_simplicity).where(Memory.deleted_at == None)
+    stmt = stmt.distinct().order_by(Memory.title)
+
+    result = await session.execute(stmt)
+    return result.scalars().all()
+
+async def select_active_memories(session: AsyncSession, titles: list[str], memory_simplicity: int) -> list[Memory]:
+    if not titles:
+        return []
+    stmt = (
+        select(Memory.title, Memory.content)
+        .where(Memory.title.in_(titles))
+        .where(Memory.memory_simplicity <= memory_simplicity)
+        .where(Memory.deleted_at == None)
+    )
+    rows = await session.execute(stmt)
+    return rows.all()
+
+async def upsert_memory(session: AsyncSession, title: str, content: str, parent_titles: list[str], source_url: str | None = None, memory_simplicity: int = 0) -> Memory:
+    # titleでメモリを検索
+    stmt = select(Memory).where(Memory.title == title)
+    memory = (await session.execute(stmt)).scalars().first()
+    if memory:
+        # 既存のメモリがあれば更新
+        memory.content = content
+        memory.source_url = source_url
+        memory.memory_simplicity = memory_simplicity
+        memory.deleted_at = None  # 論理削除されていた場合は復活させる
+    else:
+        # 新しいメモリを作成
+        memory = Memory(
+            title=title,
+            content=content,
+            source_url=source_url,
+            memory_simplicity=memory_simplicity
+        )
+        session.add(memory)
+        session.flush()  # IDを取得するためにflush
+
+    if parent_titles:
+        for parent_title in parent_titles:
+            # 親メモリをタイトルで検索
+            parent_memory = session.query(Memory).filter(Memory.title == parent_title).first()
+            if parent_memory:
+                # 親子関係が存在しない場合のみ追加
+                existing_relation = session.query(MemoryRelation).filter(
+                    MemoryRelation.parent_id == parent_memory.id,
+                    MemoryRelation.child_id == memory.id
+                ).first()
+                if not existing_relation:
+                    relation = MemoryRelation(
+                        parent_id=parent_memory.id,
+                        child_id=memory.id,
+                        relation="related"  # 必要に応じて関係の種類を変更
+                    )
+                    session.add(relation)
+    return memory
+
+async def mark_memory_as_deleted(session: AsyncSession, title: str) -> bool:
+    stmt = select(Memory).where(Memory.title == title, Memory.deleted_at == None)
+    memory = (await session.execute(stmt)).scalars().first()
+    if memory:
+        memory.deleted_at = func.now()
+        return True
+    return False

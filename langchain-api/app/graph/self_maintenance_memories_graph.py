@@ -10,7 +10,7 @@ from app.services.llm import call_llm_with_output_type
 from langchain_core.runnables.config import RunnableConfig
 
 # --- DB Models ---
-from app.db.models.memory import Memory  # id, title, content, memory_simplicity,...
+from app.db.models.memory import Memory, mark_memory_as_deleted, select_active_memories, select_active_memory_titles, upsert_memory  # id, title, content, memory_simplicity,...
 
 # --- LLM (任意: プロジェクト既存の provider 解決を流用してもよい) ---
 # ここでは抽象インターフェースだけ定義し、実装は後で差し替え
@@ -35,13 +35,7 @@ async def fetch_wellknown_words_node(state: ChatState, config: RunnableConfig) -
 
     memory_simplicity = state.get("memory_simplicity", 0)
 
-    stmt = select(Memory.title).where(Memory.memory_simplicity <= memory_simplicity)
-    stmt = stmt.distinct().order_by(Memory.title)
-
-    result = await session.execute(stmt)
-    titles = result.scalars().all()
-
-    state["wellknown_words"] = titles
+    state["wellknown_words"] = await select_active_memory_titles(session, memory_simplicity)
     return state
 
 class AskWordMeaningsAnswer(BaseMessage):
@@ -86,13 +80,9 @@ async def fetch_word_meanings_node(state: ChatState, config: RunnableConfig) -> 
     req = state["requested_words"]
     if not req:
         return state
-    stmt = (
-        select(Memory.title, Memory.content)
-        .where(Memory.title.in_(req))
-        .where(Memory.memory_simplicity <= memory_simplicity)
-    )
-    rows = await session.execute(stmt)
-    found = [{"title": r[0], "content": r[1]} for r in rows.all()]
+    
+    memories = await select_active_memories(session, req, memory_simplicity)
+    found = [{"title": r[0], "content": r[1]} for r in memories]
     # 既存とマージ
     existing = {m["title"]: m for m in state.get("word_meanings", [])}
     for m in found:
@@ -136,9 +126,13 @@ def build_word_meanings_prompt(word_meanings: List[dict]) -> str:
             + "\n".join(f"- {w['title']}: {w['content']}" for w in word_meanings)
         ))
 
+class WordDefinition(BaseMessage):
+    title: str
+    content: str
+
 class AskUpdatedMemoriesAnswer(BaseMessage):
-    updated_words: List[Dict[str, str]]  # title, content
-    updated_memories: List[Dict[str, str]]  # title, content
+    updated_words: List[WordDefinition]
+    updated_memories: List[WordDefinition]
 
 async def ask_updated_memories_node(state: ChatState) -> ChatState:
     """
@@ -151,7 +145,7 @@ async def ask_updated_memories_node(state: ChatState) -> ChatState:
         SystemMessage(content=(
             "この会話において、記憶しておくべき単語があれば updated_words に title と content を含む辞書のリストとして返せ。" \
             "また、記憶しておくべき知識や出来事があれば updated_memories に title と content を含む辞書のリストとして返せ。" \
-            "いずれも忘れるように指示されているものは content を空にせよ。" \
+            "削除するように指示されたものには content を空文字列を指定せよ。" \
         ))]
     word_meanings = state.get("word_meanings", [])
     if len(word_meanings) > 0:
@@ -169,51 +163,32 @@ async def ask_updated_memories_node(state: ChatState) -> ChatState:
     state["updated_memories"] = out.updated_memories
     return state
 
-async def save_updated_memories_node(state: ChatState, session: AsyncSession) -> ChatState:
+async def save_updated_memories_node(state: ChatState, config: RunnableConfig) -> ChatState:
     """
     updated_words / updated_memories を DB に upsert (簡易: INSERT IGNORE 的挙動)
     """
-    from sqlalchemy import select
+    session: AsyncSession = config["configurable"]["session"]
     if state.get("updated_words"):
-        # 既存タイトル取得
-        titles = [w["title"] for w in state["updated_words"] if w["title"]]
-        if titles:
-            existing_stmt = select(Memory.title).where(Memory.title.in_(titles))
-            existing_rows = await session.execute(existing_stmt)
-            existing = set(existing_rows.scalars())
-        else:
-            existing = set()
         for w in state["updated_words"]:
-            if not w["title"] or w["title"] in existing:
-                continue
-            m = Memory(
-                title=w["title"],
-                content=w.get("content") or "",
-                memory_simplicity=0,  # 単語は 0
-            )
-            session.add(m)
+            if w.content is None or w.content == "":
+                # content が None の場合は削除
+                await mark_memory_as_deleted(session, title=w.title)
+            else:
+                await upsert_memory(session, title=w.title, content=w.content or "", parent_titles=[], memory_simplicity=0)  # 型チェック回避のダミー呼び出し
     # updated_memories (simplicity=500)
     if state.get("updated_memories"):
-        titles500 = [m["title"] for m in state["updated_memories"] if m.get("title")]
-        existing_stmt2 = select(Memory.title).where(Memory.title.in_(titles500))
-        existing_rows2 = await session.execute(existing_stmt2)
-        existing2 = set(existing_rows2.scalars())
-        for m500 in state["updated_memories"]:
-            if not m500.get("title") or m500["title"] in existing2:
-                continue
-            m = Memory(
-                title=m500["title"],
-                content=m500.get("content") or "",
-                memory_simplicity=500,
-            )
-            session.add(m)
+        for w in state["updated_memories"]:
+            if w.content is None or w.content == "":
+                # content が None の場合は削除
+                await mark_memory_as_deleted(session, title=w.title)
+            else:
+                await upsert_memory(session, title=w.title, content=w.content or "", parent_titles=[], memory_simplicity=500)  # 型チェック回避のダミー呼び出し
     try:
         await session.commit()
     except Exception as e:
         await session.rollback()
         state["error"] = f"commit failed: {e}"
     return state
-
 
 def finalize_node(state: ChatState) -> ChatState:
     """

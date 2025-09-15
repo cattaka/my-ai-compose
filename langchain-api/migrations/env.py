@@ -10,8 +10,10 @@ from app.db import models  # noqa: F401  # ensures Memory, MemoryRelation are im
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
+# replace asyncpg with psycopg for alembic (sync only)
+SYNC_URL = DATABASE_URL.replace("+asyncpg", "+psycopg")
 config = context.config
-config.set_main_option("sqlalchemy.url", DATABASE_URL)
+config.set_main_option("sqlalchemy.url", SYNC_URL)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
