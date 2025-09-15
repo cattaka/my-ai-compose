@@ -56,7 +56,6 @@ yarn-error.log*
 
 # Ignore secrets
 .env.local
-.env.*
 .envrc
 
 # Others
