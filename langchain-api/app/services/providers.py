@@ -5,8 +5,9 @@ from typing import AsyncGenerator, List, Dict, Any
 
 from langchain_ollama import ChatOllama
 from app.core.config import settings
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
+from openai.types.chat import ChatCompletionChunk
 
 # 判定ユーティリティ
 def resolve_provider(model: str | None, explicit: str | None) -> tuple[str, str]:
@@ -37,6 +38,7 @@ async def openai_complete(model: str, messages: List[ChatCompletionMessageParam]
         api_key=settings.OPENAI_API_KEY
     )
 
+    # FIXME: temperature はモデルに依存するのでその考慮を入れる
     if output_structure:
         response = client.chat.completions.parse(
             model=model,
@@ -54,27 +56,17 @@ async def openai_complete(model: str, messages: List[ChatCompletionMessageParam]
     return response
 
 # OpenAI ストリーミング (SSE 風)
-async def openai_stream(model: str, messages: List[ChatCompletionMessageParam], temperature: float | None) -> AsyncGenerator[Dict[str, Any], None]:
-    headers = {
-        "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
-        "stream": True,
-    }
-    async with httpx.AsyncClient(base_url=settings.OPENAI_BASE_URL, timeout=None) as client:
-        async with client.stream("POST", "/chat/completions", json=payload, headers=headers) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if not line or not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if data == "[DONE]":
-                    break
-                yield json.loads(data)
+def openai_stream(model: str, messages: List[ChatCompletionMessageParam], temperature: float | None):
+    client = AsyncOpenAI(
+        api_key=settings.OPENAI_API_KEY
+    )
+    # FIXME: temperature はモデルに依存するのでその考慮を入れる
+    return client.chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=1, # The error sayed Only the default (1) value is supported.
+        stream=True
+    )
 
 # Ollama 直接 (非ストリーム)
 async def ollama_complete(model: str, messages_lc, output_structure: type = None, temperature: float | None = None):

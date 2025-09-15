@@ -108,7 +108,7 @@ async def upsert_memory(session: AsyncSession, title: str, content: str, parent_
             memory_simplicity=memory_simplicity
         )
         session.add(memory)
-        session.flush()  # IDを取得するためにflush
+        await session.flush()  # IDを取得するためにflush
 
     if parent_titles:
         for parent_title in parent_titles:

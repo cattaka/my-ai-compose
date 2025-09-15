@@ -53,15 +53,21 @@ def get_chat_graph():
 
     g.set_entry_point("prepare_node")
 
-    g.add_edge("prepare_node", "fetch_wellknown_words_node")
-    g.add_edge("fetch_wellknown_words_node", "ask_word_meanings_node")
-    g.add_edge("ask_word_meanings_node", "fetch_word_meanings_node")
-    g.add_edge("fetch_word_meanings_node", "ask_more_word_meanings_node")
-    g.add_edge("ask_more_word_meanings_node", "ask_updated_memories_node")
-    g.add_edge("ask_updated_memories_node", "save_updated_memories_node")
-    g.add_edge("save_updated_memories_node", "call_llm_node")
-    g.add_edge("call_llm_node", "finalize_node")
-    g.add_edge("finalize_node", "__end__")
+    debug = False
+    if debug:
+        g.add_edge("prepare_node", "call_llm_node")
+        g.add_edge("call_llm_node", "finalize_node")
+        g.add_edge("finalize_node", "__end__")
+    else:
+        g.add_edge("prepare_node", "fetch_wellknown_words_node")
+        g.add_edge("fetch_wellknown_words_node", "ask_word_meanings_node")
+        g.add_edge("ask_word_meanings_node", "fetch_word_meanings_node")
+        g.add_edge("fetch_word_meanings_node", "ask_more_word_meanings_node")
+        g.add_edge("ask_more_word_meanings_node", "ask_updated_memories_node")
+        g.add_edge("ask_updated_memories_node", "save_updated_memories_node")
+        g.add_edge("save_updated_memories_node", "call_llm_node")
+        g.add_edge("call_llm_node", "finalize_node")
+        g.add_edge("finalize_node", "__end__")
     _graph = g.compile()
     return _graph
 

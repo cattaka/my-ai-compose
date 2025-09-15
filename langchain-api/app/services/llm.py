@@ -68,42 +68,21 @@ async def _call_openai_sync(model: str, messages_lc: List[ChatCompletionMessageP
         answer = ""
     return answer
 
-async def _call_openai_async(model: str, messages_lc: List[BaseMessage], temperature: float | None = None) -> str:
-    # writer = get_stream_writer()
-    # partial = ""
-    # async for ev in openai_stream(
-    #     model=model,
-    #     messages=messages_lc,
-    #     temperature=temperature,
-    # ):
-    #     choices = ev.get("choices", [])
-    #     if not choices:
-    #         continue
-    #     delta = choices[0].get("delta", {}).get("content")
-    #     if not delta:
-    #         continue
-    #     partial += delta
-    #     # event_name 追加
-    #     writer({
-    #         "event_name": "token",
-    #         "provider": "openai",
-    #         "model": model,
-    #         "delta": delta,
-    #         "partial": partial,
-    #     })
-    # return partial
-    
-    # 一旦 syncのもので仮実装
-    out = await _call_openai_sync(model=model, messages_lc=messages_lc, output_structure=None, temperature=temperature)
+async def _call_openai_async(model: str, messages_lc: List[ChatCompletionMessageParam], temperature: float | None = None) -> str:
     writer = get_stream_writer()
-    writer({
-        "event_name": "token",
-        "provider": "openai",
-        "model": model,
-        "delta": out["content"],
-        "partial": out["content"],
-    })
-    return out["content"]
+    full = ""
+    res = await openai_stream(model=model, messages=messages_lc, temperature=temperature)
+    async for chunk in res:
+        delta = chunk.choices[0].delta.content
+        # full += delta
+        writer({
+            "event_name": "token",
+            "provider": "openai",
+            "model": model,
+            "delta": delta,
+            "partial": full,
+        })
+    return full
 
 async def _call_ollama_sync(model: str, messages_lc: List[BaseMessage], output_structure: type = None, temperature: float | None = None):
     out = await ollama_complete(
